@@ -1,3 +1,5 @@
+
+
 # In general, a flag is a string provided for supported functions under the
 # multi-valued option `FLAGS`.  It should be one of the following forms:
 #   FLAG_NAME
@@ -24,6 +26,57 @@
 #
 # To completely disable a flag FLAG_NAME expansion, set the variable
 #   SKIP_FLAG_EXPANSION_FLAG_NAME=TRUE in this file.
+
+function(sort_flags flag_list output)
+  set(output_list "")
+  set(${output} ${output_list} PARENT_SCOPE)
+endfunction(sort_flags)
+
+# Check to make sure that the flag list is well-declared:
+# flag_list is of the form:
+#   flag_name1 "flag_option1,flag_option2,..."
+function(check_flags flag_list)
+  list(LENGTH flag_list length)
+  while(length)
+    list(POP_FRONT flag_list flag_name)
+    list(POP_FRONT flag_list flag_options)
+
+    list(LENGTH flag_name name_length)
+    if (NOT ${name_length} EQUAL 1)
+      message(FATAL_ERROR "Flag name can't be empty or more than 1: ${flag_name}.")
+    endif()
+    list(FIND LIBC_FLAG_LIST ${flag_name} name_pos )
+    if (${name_pos} EQUAL "-1")
+      message(FATAL_ERROR "Flag name ${flag_name} is not defined in LIBC_FLAG_LIST.")
+    endif()
+    if (NOT flag_options)
+      message(FATAL_ERROR "Flag options for ${flag_name} cannot be empty.")
+    endif
+
+    string(REPLACE "," ";" flag_option_list "${flag_options}")
+    list(REMOVE_ITEM flag_option_list ${FLAG_${flag_name}_OPTIONS})
+    if(flag_options)
+      message(FATAL_ERROR "Flag options ${flag_option_list} are not defined in FLAG_${flag_name}_OPTIONS.")
+    endif()
+
+    list(LENGTH flag_list length)
+  endwhile()
+endfunction(check_flags)
+
+# Given a flag-expanded target like libc.src.math.expf.__FLAG_X86_FMA
+# Return its original target: libc.src.math.exp
+function(get_original_target expanded_target original_target)
+  string(REPLACE "." ";" token_list ${expanded_target})
+  list(GET token_list -1 last_token)
+  string(FIND last_token "__FLAG_" pos)
+  while(${pos} EQUAL 0)
+    list(POP_BACK token_list)
+    list(GET token_list -1 last_token)
+    string(FIND last_token "__FLAG_" pos)
+  endwhile()
+  string(REPLACE ";" "." output "${token_list}")
+  set(${original_target} ${output} PARENT_SCOPE)
+endfunction(get_original_target)
 
 
 function(extract_flag_modifier input_flag output_flag modifier)
@@ -76,9 +129,9 @@ endfunction(remove_duplicated_flags)
 
 # Collect flags from dependency list.  To see which flags come with each
 # dependence, pass `SHOW_INTERMEDIATE_OBJECTS=DEPS` to cmake.
-function(get_flags_from_dep_list output_list)
-  set(flag_list "")
-  foreach(dep IN LISTS ARGN)
+function(get_flags_from_dep_list output_list dep_list flag_list)
+  set(expending_flags "")
+  foreach(dep ${dep_list})
     if(NOT dep)
       continue()
     endif()
@@ -89,7 +142,7 @@ function(get_flags_from_dep_list output_list)
       continue()
     endif()
 
-    get_target_property(flags ${fq_dep_name} "FLAGS")
+    get_target_property(dep_flags ${fq_dep_name} "FLAGS_EXPANDED")
 
     if(flags AND "${SHOW_INTERMEDIATE_OBJECTS}" STREQUAL "DEPS")
       message(STATUS "  FLAGS from dependency ${fq_dep_name} are ${flags}")
@@ -146,3 +199,24 @@ endif()
 if(NOT(LIBC_TARGET_ARCHITECTURE_IS_X86 AND (LIBC_CPU_FEATURES MATCHES "SSE4_2")))
   set(SKIP_FLAG_EXPANSION_ROUND_OPT TRUE)
 endif()
+
+# To be called by add_*_library/test to expand config flags.
+function(process_flags target_name create_target)
+  cmake_parse_arguments(
+    "ADD_TO_EXPAND"
+    "" # Optional arguments
+    "" # Single value arguments
+    "DEPENDS;FLAGS" # Multi-value arguments
+    ${ARGN}
+  )
+
+  get_fq_target_name(${target_name} fq_target_name)
+  check_flags(${ADD_TO_EXPAND_FLAGS})
+  get_flags_from_dep_list()
+
+  if(ADD_TO_EXPAND_DEPENDS AND ("${SHOW_INTERMEDIATE_OBJECTS}" STREQUAL "DEPS"))
+    message(STATUS "Gathering FLAGS from dependencies for ${fq_target_name}")
+  endif()
+
+
+endfunction(process_flags)

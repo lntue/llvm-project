@@ -273,6 +273,7 @@ function(add_header_library target_name)
   endif()
 
   get_fq_deps_list(fq_deps_list ${ADD_TO_EXPAND_DEPENDS})
+  check_flags()
   get_flags_from_dep_list(deps_flag_list ${fq_deps_list})
   
   list(APPEND ADD_TO_EXPAND_FLAGS ${deps_flag_list})
