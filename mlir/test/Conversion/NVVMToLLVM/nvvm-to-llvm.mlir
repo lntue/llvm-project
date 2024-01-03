@@ -297,7 +297,7 @@ func.func @wgmma_f32_f16_f16(%descA : i64, %descB : i64) -> !mat64f32{
   // CHECK: %[[A2:.*]] = llvm.mlir.constant(-1 : i32) : i32
   // CHECK: %[[A3:.*]] = llvm.mlir.constant(-1 : i32) : i32
   // CHECK: %[[A4:.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: %[[A5:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: %[[A5:.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK: %[[V0:.*]] = llvm.extractvalue %[[RES]][0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)> 
   // CHECK: %[[V4:.*]] = llvm.extractvalue %[[RES]][4] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)> 
   // CHECK: %[[V11:.*]] = llvm.extractvalue %[[RES]][11] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)>  
@@ -641,6 +641,15 @@ func.func @cp_bulk_commit() {
   //CHECK: llvm.inline_asm has_side_effects asm_dialect = att "cp.async.bulk.commit_group;"
   nvvm.cp.async.bulk.commit.group
   func.return
+}
+
+
+// -----
+
+func.func @fence_mbarrier_init() {
+  //CHECK: llvm.inline_asm has_side_effects asm_dialect = att "fence.mbarrier_init.release.cluster;"
+  nvvm.fence.mbarrier.init
+  func.return 
 }
 // -----
 

@@ -112,6 +112,17 @@ int openListener(std::string Host, std::string PortStr) {
 #endif // LLVM_ON_UNIX
 }
 
+// JITLink debug support plugins put information about JITed code in this GDB
+// JIT Interface global from OrcTargetProcess.
+extern "C" struct jit_descriptor __jit_debug_descriptor;
+
+static void *findLastDebugDescriptorEntryPtr() {
+  struct jit_code_entry *Last = __jit_debug_descriptor.first_entry;
+  while (Last && Last->next_entry)
+    Last = Last->next_entry;
+  return Last;
+}
+
 int main(int argc, char *argv[]) {
 #if LLVM_ENABLE_THREADS
 
@@ -121,10 +132,11 @@ int main(int argc, char *argv[]) {
   int InFD = 0;
   int OutFD = 0;
 
+  std::vector<StringRef> TestOutputFlags;
+
   if (argc < 2)
     printErrorAndExit("insufficient arguments");
   else {
-
     StringRef ConnectArg = argv[FirstProgramArg++];
 #ifndef NDEBUG
     if (ConnectArg == "debug") {
@@ -132,6 +144,11 @@ int main(int argc, char *argv[]) {
       ConnectArg = argv[FirstProgramArg++];
     }
 #endif
+
+    while (ConnectArg.starts_with("test-")) {
+      TestOutputFlags.push_back(ConnectArg);
+      ConnectArg = argv[FirstProgramArg++];
+    }
 
     StringRef SpecifierType, Specifier;
     std::tie(SpecifierType, Specifier) = ConnectArg.split('=');
@@ -156,6 +173,10 @@ int main(int argc, char *argv[]) {
       printErrorAndExit("invalid specifier type \"" + SpecifierType + "\"");
   }
 
+  if (llvm::is_contained(TestOutputFlags, "test-jitloadergdb"))
+    fprintf(stderr, "__jit_debug_descriptor.last_entry = 0x%016" PRIx64 "\n",
+            pointerToJITTargetAddress(findLastDebugDescriptorEntryPtr()));
+
   auto Server =
       ExitOnErr(SimpleRemoteEPCServer::Create<FDSimpleRemoteEPCTransport>(
           [](SimpleRemoteEPCServer::Setup &S) -> Error {
@@ -173,6 +194,11 @@ int main(int argc, char *argv[]) {
           InFD, OutFD));
 
   ExitOnErr(Server->waitForDisconnect());
+
+  if (llvm::is_contained(TestOutputFlags, "test-jitloadergdb"))
+    fprintf(stderr, "__jit_debug_descriptor.last_entry = 0x%016" PRIx64 "\n",
+            pointerToJITTargetAddress(findLastDebugDescriptorEntryPtr()));
+
   return 0;
 
 #else
