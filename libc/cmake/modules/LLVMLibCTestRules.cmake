@@ -1,97 +1,15 @@
-# This is a helper function and not a build rule. It is to be used by the
-# various test rules to generate the full list of object files
-# recursively produced by "add_entrypoint_object" and "add_object_library"
-# targets.
-# Usage:
-#   get_object_files_for_test(<result var>
-#                             <skipped_entrypoints_var>
-#                             <target0> [<target1> ...])
-#
-#   The list of object files is collected in <result_var>.
-#   If skipped entrypoints were found, then <skipped_entrypoints_var> is
-#   set to a true value.
-#   targetN is either an "add_entrypoint_target" target or an
-#   "add_object_library" target.
-function(get_object_files_for_test result skipped_entrypoints_list)
-  set(object_files "")
-  set(skipped_list "")
-  set(checked_list "")
-  set(unchecked_list "${ARGN}")
-  list(REMOVE_DUPLICATES unchecked_list)
-
-  foreach(dep IN LISTS unchecked_list)
-    if (NOT TARGET ${dep})
-      # Skip tests with undefined dependencies.
-      list(APPEND skipped_list ${dep})
-      continue()
+function(check_entrypoints skipped_dep)
+  set(skipped_targets "")
+  foreach(dep ${ARGN})
+    if(TARGET ${dep})
+      get_target_property(skipped ${dep} SKIPPED)
     endif()
-    get_target_property(aliased_target ${dep} "ALIASED_TARGET")
-    if(aliased_target)
-      # If the target is just an alias, switch to the real target.
-      set(dep ${aliased_target})
+    if(skipped OR NOT TARGET ${dep})
+      list(APPEND skipped_targets ${dep})
     endif()
-
-    get_target_property(dep_type ${dep} "TARGET_TYPE")
-    if(NOT dep_type)
-      # Skip tests with no object dependencies.
-      continue()
-    endif()
-
-    get_target_property(dep_checked ${dep} "CHECK_OBJ_FOR_TESTS")
-
-    if(dep_checked)
-      # Target full dependency has already been checked.  Just use the results.
-      get_target_property(dep_obj ${dep} "OBJECT_FILES_FOR_TESTS")
-      get_target_property(dep_skip ${dep} "SKIPPED_LIST_FOR_TESTS")
-    else()
-      # Target full dependency hasn't been checked.  Recursively check its DEPS.
-      set(dep_obj "${dep}")
-      set(dep_skip "")
-
-      get_target_property(indirect_deps ${dep} "DEPS")
-      get_object_files_for_test(dep_obj dep_skip ${indirect_deps})
-
-      if(${dep_type} STREQUAL ${OBJECT_LIBRARY_TARGET_TYPE})
-        get_target_property(dep_object_files ${dep} "OBJECT_FILES")
-        if(dep_object_files)
-          list(APPEND dep_obj ${dep_object_files})
-        endif()
-      elseif(${dep_type} STREQUAL ${ENTRYPOINT_OBJ_TARGET_TYPE})
-        get_target_property(is_skipped ${dep} "SKIPPED")
-        if(is_skipped)
-          list(APPEND dep_skip ${dep})
-          list(REMOVE_ITEM dep_obj ${dep})
-        endif()
-        get_target_property(object_file_raw ${dep} "OBJECT_FILE_RAW")
-        if(object_file_raw)
-          list(APPEND dep_obj ${object_file_raw})
-        endif()
-      elseif(${dep_type} STREQUAL ${ENTRYPOINT_OBJ_VENDOR_TARGET_TYPE})
-        # Skip tests for externally implemented entrypoints.
-        list(APPEND dep_skip ${dep})
-        list(REMOVE_ITEM dep_obj ${dep})
-      endif()
-
-      set_target_properties(${dep} PROPERTIES
-        OBJECT_FILES_FOR_TESTS "${dep_obj}"
-        SKIPPED_LIST_FOR_TESTS "${dep_skip}"
-        CHECK_OBJ_FOR_TESTS "YES"
-      )
-
-    endif()
-
-    list(APPEND object_files ${dep_obj})
-    list(APPEND skipped_list ${dep_skip})
-
-  endforeach(dep)
-
-  list(REMOVE_DUPLICATES object_files)
-  set(${result} ${object_files} PARENT_SCOPE)
-  list(REMOVE_DUPLICATES skipped_list)
-  set(${skipped_entrypoints_list} ${skipped_list} PARENT_SCOPE)
-
-endfunction(get_object_files_for_test)
-
+  endforeach()
+  set(${skipped_dep} "${skipped_targets}" PARENT_SCOPE)
+endfunction(check_entrypoints)
 
 # Rule to add a libc unittest.
 # Usage
@@ -139,8 +57,7 @@ function(create_libc_unittest fq_target_name)
     endif()
   endif()
 
-  get_object_files_for_test(
-      link_object_files skipped_entrypoints_list ${fq_deps_list})
+  check_entrypoints(skipped_entrypoints_list ${fq_deps_list})
   if(skipped_entrypoints_list)
     # If a test is OS/target machine independent, it has to be skipped if the
     # OS/target machine combination does not provide any dependent entrypoints.
@@ -206,7 +123,7 @@ function(create_libc_unittest fq_target_name)
       CXX_STANDARD ${LIBC_UNITTEST_CXX_STANDARD}
   )
 
-  set(link_libraries ${link_object_files})
+  set(link_libraries ${fq_deps_list})
   # Test object files will depend on LINK_LIBRARIES passed down from `add_fp_unittest`
   foreach(lib IN LISTS LIBC_UNITTEST_LINK_LIBRARIES)
     if(TARGET ${lib}.unit)
@@ -246,98 +163,13 @@ function(create_libc_unittest fq_target_name)
   add_dependencies(libc-unit-tests ${fq_target_name})
 endfunction(create_libc_unittest)
 
-# Internal function, used by `add_libc_unittest`.
-function(expand_flags_for_libc_unittest target_name flags)
-  cmake_parse_arguments(
-    "EXPAND_FLAGS"
-    "IGNORE_MARKER" # No Optional arguments
-    "" # No Single-value arguments
-    "DEPENDS;FLAGS" # Multi-value arguments
-    ${ARGN}
-  )
-
-  list(LENGTH flags nflags)
-  if(NOT ${nflags})
-    create_libc_unittest(
-      ${target_name}
-      DEPENDS "${EXPAND_FLAGS_DEPENDS}"
-      FLAGS "${EXPAND_FLAGS_FLAGS}"
-      "${EXPAND_FLAGS_UNPARSED_ARGUMENTS}"
-    )
-    return()
-  endif()
-
-  list(GET flags 0 flag)
-  list(REMOVE_AT flags 0)
-  extract_flag_modifier(${flag} real_flag modifier)
-
-  if(NOT "${modifier}" STREQUAL "NO")
-    expand_flags_for_libc_unittest(
-      ${target_name}
-      "${flags}"
-      DEPENDS "${EXPAND_FLAGS_DEPENDS}" IGNORE_MARKER
-      FLAGS "${EXPAND_FLAGS_FLAGS}" IGNORE_MARKER
-      "${EXPAND_FLAGS_UNPARSED_ARGUMENTS}"
-    )
-  endif()
-
-  if("${real_flag}" STREQUAL "" OR "${modifier}" STREQUAL "ONLY")
-    return()
-  endif()
-
-  set(NEW_FLAGS ${EXPAND_FLAGS_FLAGS})
-  list(REMOVE_ITEM NEW_FLAGS ${flag})
-  get_fq_dep_list_without_flag(NEW_DEPS ${real_flag} ${EXPAND_FLAGS_DEPENDS})
-
-  # Only target with `flag` has `.__NO_flag` target, `flag__NO` and
-  # `flag__ONLY` do not.
-  if("${modifier}" STREQUAL "")
-    set(TARGET_NAME "${target_name}.__NO_${flag}")
-  else()
-    set(TARGET_NAME "${target_name}")
-  endif()
-
-  expand_flags_for_libc_unittest(
-    ${TARGET_NAME}
-    "${flags}"
-    DEPENDS "${NEW_DEPS}" IGNORE_MARKER
-    FLAGS "${NEW_FLAGS}" IGNORE_MARKER
-    "${EXPAND_FLAGS_UNPARSED_ARGUMENTS}"
-  )
-endfunction(expand_flags_for_libc_unittest)
-
 function(add_libc_unittest target_name)
-  cmake_parse_arguments(
-    "ADD_TO_EXPAND"
-    "" # Optional arguments
-    "" # Single value arguments
-    "DEPENDS;FLAGS" # Multi-value arguments
+  # Always link unit tests against non-public targets.
+  add_target_with_flags(
+    ${target_name}
+    ADD_FLAGS ${PUBLIC_PACKAGING_FLAG}__NO
+    CREATE_TARGET create_libc_unittest
     ${ARGN}
-  )
-
-  get_fq_target_name(${target_name} fq_target_name)
-
-  if(ADD_TO_EXPAND_DEPENDS AND ("${SHOW_INTERMEDIATE_OBJECTS}" STREQUAL "DEPS"))
-    message(STATUS "Gathering FLAGS from dependencies for ${fq_target_name}")
-  endif()
-
-  get_fq_deps_list(fq_deps_list ${ADD_TO_EXPAND_DEPENDS})
-  get_flags_from_dep_list(deps_flag_list ${fq_deps_list})
-  
-  list(APPEND ADD_TO_EXPAND_FLAGS ${deps_flag_list})
-  remove_duplicated_flags("${ADD_TO_EXPAND_FLAGS}" flags)
-  list(SORT flags)
-
-  if(SHOW_INTERMEDIATE_OBJECTS AND flags)
-    message(STATUS "Unit test ${fq_target_name} has FLAGS: ${flags}")
-  endif()
-
-  expand_flags_for_libc_unittest(
-    ${fq_target_name}
-    "${flags}"
-    DEPENDS ${fq_deps_list} IGNORE_MARKER
-    FLAGS ${flags} IGNORE_MARKER
-    ${ADD_TO_EXPAND_UNPARSED_ARGUMENTS}
   )
 endfunction(add_libc_unittest)
 
@@ -388,8 +220,7 @@ function(add_libc_fuzzer target_name)
 
   get_fq_target_name(${target_name} fq_target_name)
   get_fq_deps_list(fq_deps_list ${LIBC_FUZZER_DEPENDS})
-  get_object_files_for_test(
-      link_object_files skipped_entrypoints_list ${fq_deps_list})
+  check_entrypoints(skipped_entrypoints_list ${fq_deps_list})
   if(skipped_entrypoints_list)
     if(LIBC_CMAKE_VERBOSE_LOGGING)
       set(msg "Skipping fuzzer target ${fq_target_name} as it has missing deps: "
@@ -417,7 +248,7 @@ function(add_libc_fuzzer target_name)
   target_include_directories(${fq_target_name} PRIVATE ${LIBC_SOURCE_DIR})
 
   target_link_libraries(${fq_target_name} PRIVATE 
-    ${link_object_files} 
+    ${fq_deps_list} 
     ${LIBC_FUZZER_LINK_LIBRARIES}
   )
 
@@ -518,8 +349,7 @@ function(add_integration_test test_name)
 
   # TODO: Instead of gathering internal object files from entrypoints,
   # collect the object files with public names of entrypoints.
-  get_object_files_for_test(
-      link_object_files skipped_entrypoints_list ${fq_deps_list})
+  check_entrypoints(skipped_entrypoints_list ${fq_deps_list})
   if(skipped_entrypoints_list)
     if(LIBC_CMAKE_VERBOSE_LOGGING)
       set(msg "Skipping integration test ${fq_target_name} as it has missing deps: "
@@ -528,14 +358,13 @@ function(add_integration_test test_name)
     endif()
     return()
   endif()
-  list(REMOVE_DUPLICATES link_object_files)
 
   # Make a library of all deps
   add_library(
     ${fq_target_name}.__libc__
     STATIC
     EXCLUDE_FROM_ALL
-    ${link_object_files}
+    ${fq_deps_list}
   )
   set_target_properties(${fq_target_name}.__libc__
       PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
@@ -547,7 +376,7 @@ function(add_integration_test test_name)
     ${fq_build_target_name}
     EXCLUDE_FROM_ALL
     # The NVIDIA 'nvlink' linker does not currently support static libraries.
-    $<$<BOOL:${LIBC_GPU_TARGET_ARCHITECTURE_IS_NVPTX}>:${link_object_files}>
+    $<$<BOOL:${LIBC_GPU_TARGET_ARCHITECTURE_IS_NVPTX}>:${fq_deps_list}>
     ${INTEGRATION_TEST_SRCS}
     ${INTEGRATION_TEST_HDRS}
   )
@@ -702,22 +531,20 @@ function(add_libc_hermetic_test test_name)
 
   # TODO: Instead of gathering internal object files from entrypoints,
   # collect the object files with public names of entrypoints.
-  get_object_files_for_test(
-      link_object_files skipped_entrypoints_list ${fq_deps_list})
+  check_entrypoints(skipped_entrypoints_list ${fq_deps_list})
   if(skipped_entrypoints_list)
     set(msg "Skipping hermetic test ${fq_target_name} as it has missing deps: "
             "${skipped_entrypoints_list}.")
     message(STATUS ${msg})
     return()
   endif()
-  list(REMOVE_DUPLICATES link_object_files)
 
   # Make a library of all deps
   add_library(
     ${fq_target_name}.__libc__
     STATIC
     EXCLUDE_FROM_ALL
-    ${link_object_files}
+    ${fq_deps_list}
   )
   set_target_properties(${fq_target_name}.__libc__
       PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
@@ -729,7 +556,7 @@ function(add_libc_hermetic_test test_name)
     ${fq_build_target_name}
     EXCLUDE_FROM_ALL
     # The NVIDIA 'nvlink' linker does not currently support static libraries.
-    $<$<BOOL:${LIBC_GPU_TARGET_ARCHITECTURE_IS_NVPTX}>:${link_object_files}>
+    $<$<BOOL:${LIBC_GPU_TARGET_ARCHITECTURE_IS_NVPTX}>:${fq_deps_list}>
     ${HERMETIC_TEST_SRCS}
     ${HERMETIC_TEST_HDRS}
   )
@@ -803,14 +630,32 @@ function(add_libc_test test_name)
     "LIBC_TEST"
     "UNIT_TEST_ONLY;HERMETIC_TEST_ONLY" # Optional arguments
     "" # Single value arguments
-    "" # Multi-value arguments
+    "DEPENDS;FLAGS" # Multi-value arguments
     ${ARGN}
   )
   if(LIBC_ENABLE_UNITTESTS AND NOT LIBC_TEST_HERMETIC_TEST_ONLY)
-    add_libc_unittest(${test_name}.__unit__ ${LIBC_TEST_UNPARSED_ARGUMENTS})
+    add_libc_unittest(
+      ${test_name}.__unit__
+      ${LIBC_TEST_UNPARSED_ARGUMENTS}
+      DEPENDS ${LIBC_TEST_DEPENDS}
+      FLAGS ${LIBC_TEST_FLAGS}
+    )
   endif()
   if(LIBC_ENABLE_HERMETIC_TESTS AND NOT LIBC_TEST_UNIT_TEST_ONLY)
-    add_libc_hermetic_test(${test_name}.__hermetic__ ${LIBC_TEST_UNPARSED_ARGUMENTS})
+    if(LIBC_TARGET_ARCHITECTURE_IS_GPU)
+      # Tests for GPU targets always linked with non-public-packaged targets.
+      set(packaging_flag ${PUBLIC_PACKAGING_FLAG}__NO)
+    else()
+      # Tests for CPU targets always linked with public-packaged targets.
+      set(packaging_flag ${PUBLIC_PACKAGING_FLAG}__ONLY)
+    endif()
+    add_target_with_flags(
+      ${test_name}.__hermetic__
+      ADD_FLAGS ${packaging_flag}
+      CREATE_TARGET add_libc_hermetic_test
+      LIBC_TEST_UNPARSED_ARGUMENTS
+    )
+
     get_fq_target_name(${test_name} fq_test_name)
     if(TARGET ${fq_test_name}.__hermetic__ AND TARGET ${fq_test_name}.__unit__)
       # Tests like the file tests perform file operations on disk file. If we

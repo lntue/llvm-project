@@ -26,8 +26,7 @@ function(add_diff_binary target_name)
 
   get_fq_target_name(${target_name} fq_target_name)
   get_fq_deps_list(fq_deps_list ${DIFF_DEPENDS})
-  get_object_files_for_test(
-      link_object_files skipped_entrypoints_list ${fq_deps_list})
+  check_entrypoints(skipped_entrypoints_list ${fq_deps_list})
   if(skipped_entrypoints_list)
     if(LIBC_CMAKE_VERBOSE_LOGGING)
       set(msg "Will not build ${fq_target_name} as it has missing deps: "
@@ -57,7 +56,7 @@ function(add_diff_binary target_name)
 
   target_link_libraries(
       ${fq_target_name}
-      PRIVATE ${link_object_files} libc_diff_test_utils)
+      PRIVATE ${fq_deps_list} libc_diff_test_utils)
 
   set_target_properties(${fq_target_name}
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
