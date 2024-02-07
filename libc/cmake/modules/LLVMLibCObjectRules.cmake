@@ -1,5 +1,3 @@
-set(OBJECT_LIBRARY_TARGET_TYPE "OBJECT_LIBRARY")
-
 function(_get_compile_options_from_flags output_var)
   set(compile_options "")
 
@@ -161,7 +159,7 @@ function(_build_gpu_object_for_single_arch fq_target_name gpu_arch)
     "ADD_GPU_OBJ"
     "" # No optional arguments
     "NAME;CXX_STANDARD" # Single value arguments
-    "SRCS;HDRS;DEPENDS;COMPILE_OPTIONS;FLAGS"  # Multi value arguments
+    "SRCS;HDRS;COMPILE_OPTIONS;LINK_LIBRARIES;LINK_OPTIONS;DEPENDS;FLAGS"  # Multi value arguments
     ${ARGN}
   )
 
@@ -198,10 +196,25 @@ function(_build_gpu_object_for_single_arch fq_target_name gpu_arch)
   target_include_directories(${fq_target_name} SYSTEM PRIVATE ${LIBC_INCLUDE_DIR})
   target_include_directories(${fq_target_name} PRIVATE ${LIBC_SOURCE_DIR})
   set_target_properties(${fq_target_name} PROPERTIES CXX_STANDARD ${ADD_GPU_OBJ_CXX_STANDARD})
-  if(ADD_GPU_OBJ_DEPENDS)
-    add_dependencies(${fq_target_name} ${ADD_GPU_OBJ_DEPENDS})
-    set_target_properties(${fq_target_name} PROPERTIES DEPS "${ADD_GPU_OBJ_DEPENDS}")
+
+  if(ADD_GPU_OBJ_LINK_OPTIONS)
+    target_link_options(${fq_target_name} PRIVATE ${ADD_GPU_OBJ_LINK_OPTIONS})
   endif()
+  if(ADD_GPU_OBJ_LINK_LIBRARIES)
+    target_link_libraries(${fq_target_name} PRIVATE ${ADD_GPU_OBJ_LINK_LIBRARIES})
+  endif()
+
+  get_all_deps(all_deps ${ADD_GPU_OBJ_DEPENDS})
+  get_linkable_targets(objects ${all_deps})
+  add_dependencies(${fq_target_name} ${all_deps})
+  target_link_libraries(${fq_target_name} PRIVATE ${objects})
+
+  set_target_properties(
+    ${fq_target_name}
+    PROPERTIES
+      TARGET_TYPE ${OBJECT_LIBRARY_TARGET_TYPE}
+      DEPS ${all_deps}
+  )
 endfunction(_build_gpu_object_for_single_arch)
 
 # Build the object target for the GPU.
@@ -221,7 +234,7 @@ function(_build_gpu_object_bundle fq_target_name)
     "ADD_GPU_OBJ"
     "" # No optional arguments
     "NAME;CXX_STANDARD" # Single value arguments
-    "SRCS;HDRS;DEPENDS;COMPILE_OPTIONS;FLAGS"  # Multi value arguments
+    "SRCS;HDRS;COMPILE_OPTIONS;LINK_OPTIONS;LINK_LIBRARIES;DEPENDS;FLAGS"  # Multi value arguments
     ${ARGN}
   )
 
@@ -229,11 +242,11 @@ function(_build_gpu_object_bundle fq_target_name)
     set(ADD_GPU_OBJ_CXX_STANDARD ${CMAKE_CXX_STANDARD})
   endif()
 
-  foreach(add_gpu_obj_src ${ADD_GPU_OBJ_SRCS})
+  foreach(src ${ADD_GPU_OBJ_SRCS})
     # The packaged version will be built for every target GPU architecture. We do
     # this so we can support multiple accelerators on the same machine.
     foreach(gpu_arch ${LIBC_GPU_ARCHITECTURES})
-      get_filename_component(src_name ${add_gpu_obj_src} NAME)
+      get_filename_component(src_name ${src} NAME)
       set(gpu_target_name ${fq_target_name}.${src_name}.${gpu_arch})
 
       _build_gpu_object_for_single_arch(
@@ -241,10 +254,12 @@ function(_build_gpu_object_bundle fq_target_name)
         ${gpu_arch}
         CXX_STANDARD ${ADD_GPU_OBJ_CXX_STANDARD}
         HDRS ${ADD_GPU_OBJ_HDRS}
-        SRCS ${add_gpu_obj_src}
+        SRCS ${src}
         COMPILE_OPTIONS
           ${ADD_GPU_OBJ_COMPILE_OPTIONS}
           "-emit-llvm"
+        LINK_OPTIONS ${ADD_GPU_OBJ_LINK_OPTIONS}
+        LINK_LIBRARIES ${ADD_GPU_OBJ_LINK_LIBRARIES}
         DEPENDS ${ADD_GPU_OBJ_DEPENDS}
       )
       # Append this target to a list of images to package into a single binary.
@@ -258,7 +273,7 @@ function(_build_gpu_object_bundle fq_target_name)
         list(APPEND packager_images
              --image=file=${input_file},arch=${gpu_arch},triple=${AMDGPU_TARGET_TRIPLE})
        endif()
-      list(APPEND gpu_target_objects ${input_file})
+      list(APPEND gpu_target_objects ${gpu_target_name})
     endforeach()
 
     # After building the target for the desired GPUs we must package the output
@@ -267,12 +282,11 @@ function(_build_gpu_object_bundle fq_target_name)
     set(packaged_target_name ${fq_target_name}.${src_name}.__gpu__)
     set(packaged_output_name ${CMAKE_CURRENT_BINARY_DIR}/${fq_target_name}.${src_name}.gpubin)
 
-    add_custom_command(OUTPUT ${packaged_output_name}
-                       COMMAND ${LIBC_CLANG_OFFLOAD_PACKAGER}
-                               ${packager_images} -o ${packaged_output_name}
-                       DEPENDS ${gpu_target_objects} ${add_gpu_obj_src} ${ADD_GPU_OBJ_HDRS}
-                       COMMENT "Packaging LLVM offloading binary")
-    add_custom_target(${packaged_target_name} DEPENDS ${packaged_output_name})
+    add_custom_target(
+      ${packaged_target_name}
+      COMMAND ${LIBC_CLANG_OFFLOAD_PACKAGER} ${packager_images} -o ${packaged_output_name}
+      DEPENDS ${gpu_target_objects} ${src} ${ADD_GPU_OBJ_HDRS}
+      COMMENT "Packaging LLVM offloading binary")
     list(APPEND packaged_gpu_names ${packaged_target_name})
     list(APPEND packaged_gpu_binaries ${packaged_output_name})
   endforeach()
@@ -286,14 +300,14 @@ function(_build_gpu_object_bundle fq_target_name)
   math(EXPR name_loc "${last_dot_loc} + 1")
   string(SUBSTRING ${fq_target_name} ${name_loc} -1 target_name)
   set(stub_filename "${target_name}.cpp")
-  add_custom_command(
-    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/stubs/${stub_filename}"
+  set(stub_target_name ${fq_target_name}.__stub__)
+
+  add_custom_target(
+    ${stub_target_name}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/stubs/
     COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/stubs/${stub_filename}
-    DEPENDS ${gpu_target_objects} ${ADD_GPU_OBJ_SRCS} ${ADD_GPU_OBJ_HDRS}
+    DEPENDS ${gpu_target_objects}
   )
-  set(stub_target_name ${fq_target_name}.__stub__)
-  add_custom_target(${stub_target_name} DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/stubs/${stub_filename})
 
   add_library(
     ${fq_target_name}
@@ -331,9 +345,8 @@ function(create_object_library fq_target_name)
     "ADD_OBJECT"
     "ALIAS;NO_GPU_BUNDLE" # optional arguments
     "CXX_STANDARD" # Single value arguments
-    "SRCS;HDRS;COMPILE_OPTIONS;DEPENDS;FLAGS" # Multivalue arguments
+    "SRCS;HDRS;COMPILE_OPTIONS;LINK_OPTIONS;LINK_LIBRARIES;DEPENDS;FLAGS" # Multivalue arguments
     ${ARGN}
-  )
 
   get_fq_deps_list(fq_deps_list ${ADD_OBJECT_DEPENDS})
 
@@ -381,6 +394,8 @@ function(create_object_library fq_target_name)
         HDRS ${ADD_OBJECT_HDRS}
         CXX_STANDARD ${ADD_OBJECT_CXX_STANDARD}
         COMPILE_OPTIONS ${compile_options} "-DLIBC_COPT_PUBLIC_PACKAGING"
+        LINK_OPTIONS ${ADD_OBJECT_LINK_OPTIONS}
+        LINK_LIBRARIES ${ADD_OBJECT_LINK_LIBRARIES}
         DEPENDS ${fq_deps_list}
       )
     endif()
@@ -393,6 +408,8 @@ function(create_object_library fq_target_name)
       HDRS ${ADD_OBJECT_HDRS}
       CXX_STANDARD ${ADD_OBJECT_CXX_STANDARD}
       COMPILE_OPTIONS ${compile_options} ${public_packaging_for_internal}
+      LINK_OPTIONS ${ADD_OBJECT_LINK_OPTIONS}
+      LINK_LIBRARIES ${ADD_OBJECT_LINK_LIBRARIES}
       DEPENDS ${fq_deps_list}
     )
   else()
@@ -450,9 +467,6 @@ function(add_object_library target_name)
     CREATE_TARGET create_object_library
     ${ARGN})
 endfunction(add_object_library)
-
-set(ENTRYPOINT_OBJ_TARGET_TYPE "ENTRYPOINT_OBJ")
-set(ENTRYPOINT_OBJ_VENDOR_TARGET_TYPE "ENTRYPOINT_OBJ_VENDOR")
 
 # A rule for entrypoint object targets.
 # Usage:
@@ -747,8 +761,6 @@ function(add_entrypoint_object target_name)
     ${ADD_ENTRYPOINT_OBJ_UNPARSED_ARGUMENTS}
   )
 endfunction(add_entrypoint_object)
-
-set(ENTRYPOINT_EXT_TARGET_TYPE "ENTRYPOINT_EXT")
 
 # A rule for external entrypoint targets.
 # Usage:

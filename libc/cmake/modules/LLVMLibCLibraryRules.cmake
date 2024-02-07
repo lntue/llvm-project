@@ -1,55 +1,3 @@
-function(collect_object_file_deps target result)
-  # NOTE: This function does add entrypoint targets to |result|.
-  # It is expected that the caller adds them separately.
-  set(all_deps "")
-  get_target_property(target_type ${target} "TARGET_TYPE")
-  if(NOT target_type)
-    return()
-  endif()
-
-  if(${target_type} STREQUAL ${OBJECT_LIBRARY_TARGET_TYPE})
-    list(APPEND all_deps ${target})
-    get_target_property(deps ${target} "DEPS")
-    foreach(dep IN LISTS deps)
-      collect_object_file_deps(${dep} dep_targets)
-      list(APPEND all_deps ${dep_targets})
-    endforeach(dep)
-    list(REMOVE_DUPLICATES all_deps)
-    set(${result} ${all_deps} PARENT_SCOPE)
-    return()
-  endif()
-
-  if(${target_type} STREQUAL ${ENTRYPOINT_OBJ_TARGET_TYPE} OR
-     ${target_type} STREQUAL ${ENTRYPOINT_OBJ_VENDOR_TARGET_TYPE})
-    set(entrypoint_target ${target})
-    get_target_property(is_alias ${entrypoint_target} "IS_ALIAS")
-    if(is_alias)
-      get_target_property(aliasee ${entrypoint_target} "DEPS")
-      if(NOT aliasee)
-        message(FATAL_ERROR
-                "Entrypoint alias ${entrypoint_target} does not have an aliasee.")
-      endif()
-      set(entrypoint_target ${aliasee})
-    endif()
-    get_target_property(deps ${target} "DEPS")
-    foreach(dep IN LISTS deps)
-      collect_object_file_deps(${dep} dep_targets)
-      list(APPEND all_deps ${dep_targets})
-    endforeach(dep)
-    list(REMOVE_DUPLICATES all_deps)
-    set(${result} ${all_deps} PARENT_SCOPE)
-    return()
-  endif()
-
-  if(${target_type} STREQUAL ${ENTRYPOINT_EXT_TARGET_TYPE})
-    # It is not possible to recursively extract deps of external dependencies.
-    # So, we just accumulate the direct dep and return.
-    get_target_property(deps ${target} "DEPS")
-    set(${result} ${deps} PARENT_SCOPE)
-    return()
-  endif()
-endfunction(collect_object_file_deps)
-
 # A rule to build a library from a collection of entrypoint objects.
 # Usage:
 #     add_entrypoint_library(
@@ -73,7 +21,7 @@ function(add_entrypoint_library target_name)
   endif()
 
   get_fq_deps_list(fq_deps_list ${ENTRYPOINT_LIBRARY_DEPENDS})
-  set(all_deps "")
+
   foreach(dep IN LISTS fq_deps_list)
     get_target_property(dep_type ${dep} "TARGET_TYPE")
     if(NOT ((${dep_type} STREQUAL ${ENTRYPOINT_OBJ_TARGET_TYPE}) OR
@@ -82,37 +30,25 @@ function(add_entrypoint_library target_name)
       message(FATAL_ERROR "Dependency '${dep}' of 'add_entrypoint_collection' is "
                           "not an 'add_entrypoint_object' or 'add_entrypoint_external' target.")
     endif()
-    collect_object_file_deps(${dep} recursive_deps)
-    list(APPEND all_deps ${recursive_deps})
-    # Add the entrypoint object target explicitly as collect_object_file_deps
-    # only collects object files from non-entrypoint targets.
-    if(${dep_type} STREQUAL ${ENTRYPOINT_OBJ_TARGET_TYPE} OR
-       ${dep_type} STREQUAL ${ENTRYPOINT_OBJ_VENDOR_TARGET_TYPE})
-      set(entrypoint_target ${dep})
-      get_target_property(is_alias ${entrypoint_target} "IS_ALIAS")
-      if(is_alias)
-        get_target_property(aliasee ${entrypoint_target} "DEPS")
-        if(NOT aliasee)
-          message(FATAL_ERROR
-                  "Entrypoint alias ${entrypoint_target} does not have an aliasee.")
-        endif()
-        set(entrypoint_target ${aliasee})
-      endif()
-    endif()
-    list(APPEND all_deps ${entrypoint_target})
   endforeach(dep)
-  list(REMOVE_DUPLICATES all_deps)
-  set(objects "")
-  foreach(dep IN LISTS all_deps)
-    list(APPEND objects $<$<STREQUAL:$<TARGET_NAME_IF_EXISTS:${dep}>,${dep}>:$<TARGET_OBJECTS:${dep}>>)
-  endforeach(dep)
+
+  get_all_deps(all_deps ${fq_dep_list})
+  get_linkable_targets(objects ${all_deps})
 
   add_library(
     ${target_name}
     STATIC
     ${objects}
   )
-  set_target_properties(${target_name} PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${LIBC_LIBRARY_DIR})
+
+  add_dependencies(target_name ${all_dep})
+  set_target_properties(
+    ${target_name}
+    PROPERTIES
+      ARCHIVE_OUTPUT_DIRECTORY ${LIBC_LIBRARY_DIR}
+      TARGET_TYPE ${ENTRYPOINT_LIBRARY_TARGET_TYPE}
+      DEPS ${all_dep}
+  )
 endfunction(add_entrypoint_library)
 
 # Rule to build a shared library of redirector objects.
@@ -144,15 +80,13 @@ function(add_redirector_library target_name)
   set_target_properties(${target_name}  PROPERTIES LINKER_LANGUAGE "C")
 endfunction(add_redirector_library)
 
-set(HDR_LIBRARY_TARGET_TYPE "HDR_LIBRARY")
-
 # Internal function, used by `add_header_library`.
 function(create_header_library fq_target_name)
   cmake_parse_arguments(
     "ADD_HEADER"
     "" # Optional arguments
     "" # Single value arguments
-    "HDRS;DEPENDS;FLAGS;COMPILE_OPTIONS" # Multi-value arguments
+    "HDRS;DEPENDS;FLAGS;COMPILE_OPTIONS;LINK_LIBRARIES;LINK_OPTIONS" # Multi-value arguments
     ${ARGN}
   )
 
@@ -171,29 +105,27 @@ function(create_header_library fq_target_name)
 
   add_library(${fq_target_name} INTERFACE)
   target_sources(${fq_target_name} INTERFACE ${ADD_HEADER_HDRS})
-  if(ADD_HEADER_DEPENDS)
-    add_dependencies(${fq_target_name} ${ADD_HEADER_DEPENDS})
-
-    # `*.__copied_hdr__` is created only to copy the header files to the target
-    # location, not to be linked against.
-    set(link_lib "")
-    foreach(dep ${ADD_HEADER_DEPENDS})
-      if (NOT dep MATCHES "__copied_hdr__")
-        list(APPEND link_lib ${dep})
-      endif()
-    endforeach()
-
-    target_link_libraries(${fq_target_name} INTERFACE ${link_lib})
-  endif()
   if(ADD_HEADER_COMPILE_OPTIONS)
     target_compile_options(${fq_target_name} INTERFACE ${ADD_HEADER_COMPILE_OPTIONS})
   endif()
+  if(ADD_HEADER_LINK_LIBRARIES)
+    target_link_libraries(${fq_target_name} INTERFACE ${ADD_HEADER_LINK_LIBRARIES})
+  endif()
+  if(ADD_HEADER_LINK_OPTIONS)
+    target_link_options(${fq_target_name} INTERFACE ${ADD_HEADER_LINK_OPTIONS})
+  endif()
+
+  get_all_deps(all_deps ${ADD_HEADER_DEPENDS})
+  add_dependencies(${fq_target_name} ${all_deps})
+  get_linkable_targets(objects ${all_deps})
+  target_link_libraries(${fq_targe_name} INTERFACE ${objects})
+
   set_target_properties(
     ${fq_target_name}
     PROPERTIES
       INTERFACE_FLAGS "${ADD_HEADER_FLAGS}"
       TARGET_TYPE "${HDR_LIBRARY_TARGET_TYPE}"
-      DEPS "${ADD_HEADER_DEPENDS}"
+      DEPS "${all_deps}"
       FLAGS "${ADD_HEADER_FLAGS}"
   )
 endfunction(create_header_library)

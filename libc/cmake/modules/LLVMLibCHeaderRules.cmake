@@ -5,6 +5,7 @@
 #     add_header(
 #       <target name>
 #       HDR <header file>
+#       DEPENDS
 #     )
 function(add_header target_name)
   cmake_parse_arguments(
@@ -23,46 +24,41 @@ function(add_header target_name)
   set(dest_file ${LIBC_INCLUDE_DIR}/${relative_path})
   set(src_file ${CMAKE_CURRENT_SOURCE_DIR}/${ADD_HEADER_HDR})
 
-  add_custom_command(
-    OUTPUT ${dest_file}
+  get_fq_target_name(${target_name} fq_target_name)
+  set(copied_hdr_target ${fq_target_name}.__copied_hdr__)
+
+  add_custom_target(
+    ${copied_hdr_target}
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${src_file} ${dest_file}
     DEPENDS ${src_file}
   )
 
-  get_fq_target_name(${target_name} fq_target_name)
-  set(copied_hdr_target ${fq_target_name}.__copied_hdr__)
-  add_custom_target(
-    ${copied_hdr_target}
-    DEPENDS ${dest_file}
-  )
+  get_fq_deps_list(fq_deps_list "${ADD_HEADER_DEPENDS}")
+  # Dependencies of a add_header target can only be another add_header target
+  # or an add_gen_header target.
+  foreach(dep IN LISTS fq_deps_list)
+    get_target_property(dep_type ${dep} TARGET_TYPE)
+    if(NOT ${dep_type} STREQUAL ${HEADER_TARGET_TYPE})
+      message(FATAL_ERROR "Invalid dependency '${dep}' for '${fq_target_name}'.")
+    endif()
+  endforeach()
 
-  if(ADD_HEADER_DEPENDS)
-    get_fq_deps_list(fq_deps_list ${ADD_HEADER_DEPENDS})
-    # Dependencies of a add_header target can only be another add_header target
-    # or an add_gen_header target.
-    foreach(dep IN LISTS fq_deps_list)
-      get_target_property(header_file ${dep} HEADER_FILE_PATH)
-      if(NOT header_file)
-        message(FATAL_ERROR "Invalid dependency '${dep}' for '${fq_target_name}'.")
-      endif()
-    endforeach()
-    add_dependencies(
-      ${copied_hdr_target} ${fq_deps_list}
-    )
-  endif()
+  get_all_deps(all_deps {fq_dep_list})
 
   add_header_library(
-    ${target_name}
+    ${fq_target_name}
     HDRS
       ${dest_file}
     DEPENDS
       ${copied_hdr_target}
+      ${all_deps}
   )
+
   set_target_properties(
     ${fq_target_name}
     PROPERTIES
       HEADER_FILE_PATH ${dest_file}
-      DEPS "${fq_deps_list}"
+      TARGET_TYPE ${HEADER_TARGET_TYPE}
   )
 endfunction(add_header)
 
