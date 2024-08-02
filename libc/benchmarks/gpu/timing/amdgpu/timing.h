@@ -9,6 +9,7 @@
 #ifndef LLVM_LIBC_UTILS_GPU_TIMING_AMDGPU
 #define LLVM_LIBC_UTILS_GPU_TIMING_AMDGPU
 
+#include "src/__support/CPP/array.h"
 #include "src/__support/CPP/type_traits.h"
 #include "src/__support/GPU/utils.h"
 #include "src/__support/common.h"
@@ -43,14 +44,13 @@ namespace LIBC_NAMESPACE_DECL {
 // Profile a simple function and obtain its latency in clock cycles on the
 // system. This function cannot be inlined or else it will disturb the very
 // delicate balance of hard-coded dependencies.
-template <typename F, typename T>
-[[gnu::noinline]] static LIBC_INLINE uint64_t latency(F f, T t) {
-  // We need to store the input somewhere to guarantee that the compiler
-  // will not constant propagate it and remove the profiling region.
-  volatile T storage = t;
-  T arg = storage;
+template <typename F, typename T, size_t N>
+[[gnu::noinline]] static LIBC_INLINE uint64_t
+latency(F f, const cpp::array<T, N> &inputs) {
+  // // We need to store the input somewhere to guarantee that the compiler
+  // // will not constant propagate it and remove the profiling region.
 
-  FORCE_TO_REGISTER(T, arg);
+  FORCE_TO_REGISTER(decltype(inputs), inputs);
 
   // The AMDGPU architecture needs to wait on pending results.
   gpu::memory_fence();
@@ -59,16 +59,18 @@ template <typename F, typename T>
 
   // This forces the compiler to load the input argument and run the clock
   // cycle counter before the profiling region.
-  FORCE_TO_REGISTER(T, arg);
+  FORCE_TO_REGISTER(decltype(inputs), inputs);
   asm("" ::"s"(start));
 
   // Run the function under test and return its value.
-  auto result = f(arg);
+  for (auto input : inputs) {
+    auto result = f(input);
 
-  // This inline assembly performs a no-op which forces the result to both
-  // be used and prevents us from exiting this region before it's complete.
-  asm("v_or_b32 %[v_reg], 0, %[v_reg]\n" ::[v_reg] "v"(
-      static_cast<uint32_t>(result)));
+    // This inline assembly performs a no-op which forces the result to both
+    // be used and prevents us from exiting this region before it's complete.
+    asm("v_or_b32 %[v_reg], 0, %[v_reg]\n" ::[v_reg] "v"(
+        static_cast<uint32_t>(result)));
+  }
 
   // Obtain the current timestamp after running the calculation and force
   // ordering.
