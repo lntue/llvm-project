@@ -63,7 +63,8 @@ LIBC_INLINE void normalize<long double>(int &exponent, UInt128 &mantissa) {
       hi_bits ? (cpp::countl_zero(hi_bits) - 15)
               : (cpp::countl_zero(static_cast<uint64_t>(mantissa)) + 49);
   exponent -= shift;
-  mantissa = static_cast<typename FPBits<T>::StorageType>(mantissa << shift);
+  mantissa =
+      static_cast<typename FPBits<long double>::StorageType>(mantissa << shift);
 }
 #endif
 

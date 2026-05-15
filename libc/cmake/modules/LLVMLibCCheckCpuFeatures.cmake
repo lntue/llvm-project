@@ -30,6 +30,14 @@ endif()
 set(LIBC_COMPILE_OPTIONS_NATIVE "${_libc_native_default}" CACHE STRING
     "Compile options for host-native builds.  Set to empty to disable -march=native.")
 
+if(LIBC_COMPILE_OPTIONS_NATIVE)
+  check_cxx_compiler_flag("${LIBC_COMPILE_OPTIONS_NATIVE}" LIBC_COMPILER_HAS_NATIVE)
+  if(NOT LIBC_COMPILER_HAS_NATIVE)
+    set(LIBC_COMPILE_OPTIONS_NATIVE "" CACHE STRING
+        "Compile options for host-native builds.  Set to empty to disable -march=native." FORCE)
+  endif()
+endif()
+
 # Making sure ALL_CPU_FEATURES is sorted.
 list(SORT ALL_CPU_FEATURES)
 
