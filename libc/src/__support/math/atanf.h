@@ -30,7 +30,7 @@ namespace LIBC_NAMESPACE_DECL {
 
 namespace math {
 
-LIBC_INLINE constexpr float atanf(float x) {
+LIBC_INLINE LIBC_MATH_CONSTEXPR float atanf(float x) {
   using namespace inv_trigf_utils_internal;
   using FPBits = typename fputil::FPBits<float>;
 
@@ -96,7 +96,7 @@ LIBC_INLINE constexpr float atanf(float x) {
   double x_d = 0, const_term = 0, final_sign = 0;
   int idx = 0;
 
-  if (x_abs > 0x3f80'0000U) {
+  if (x_abs > 1065353216U) { // 0x3f80'0000U
     // |x| > 1, we need to invert x, so we will perform range reduction in
     // double precision.
     x_d = 1.0 / static_cast<double>(x_bits.get_val());

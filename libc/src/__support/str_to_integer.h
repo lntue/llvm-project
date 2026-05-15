@@ -152,13 +152,14 @@ strtointeger(const CharType *__restrict src, int base,
       result = abs_max;
       error_val = ERANGE;
     } else {
-      result = result * static_cast<ResultType>(base);
+      result = static_cast<ResultType>(result * static_cast<ResultType>(base));
     }
     if (result > abs_max - static_cast<ResultType>(cur_digit)) {
       result = abs_max;
       error_val = ERANGE;
     } else {
-      result = result + static_cast<ResultType>(cur_digit);
+      result =
+          static_cast<ResultType>(result + static_cast<ResultType>(cur_digit));
     }
   }
 

@@ -212,8 +212,9 @@ private:
       StorageType m_x = sx.get_explicit_mantissa();
       StorageType m_y = sy.get_explicit_mantissa();
       StorageType d = (e_x == e_y)
-                          ? (m_x - m_y)
-                          : static_cast<StorageType>(m_x << (e_x - e_y)) % m_y;
+                          ? static_cast<StorageType>(m_x - m_y)
+                          : static_cast<StorageType>(
+                                static_cast<U>(m_x << (e_x - e_y)) % m_y);
       if (d == 0)
         return FPB::zero();
       // iy - 1 because of "zero power" for number with power 1
@@ -222,7 +223,7 @@ private:
     // Both subnormal special case.
     if (LIBC_UNLIKELY(e_x == 0 && e_y == 0)) {
       FPB d;
-      d.set_mantissa(sx.uintval() % sy.uintval());
+      d.set_mantissa(static_cast<StorageType>(sx.uintval() % sy.uintval()));
       return d;
     }
 
@@ -249,7 +250,7 @@ private:
     {
       // Shift hy right until the end or n = 0
       int right_shift = exp_diff < tail_zeros_m_y ? exp_diff : tail_zeros_m_y;
-      m_y >>= right_shift;
+      m_y = static_cast<U>(m_y >> right_shift);
       exp_diff -= right_shift;
       e_y += right_shift;
     }
@@ -258,11 +259,11 @@ private:
       // Shift hx left until the end or n = 0
       int left_shift =
           exp_diff < DEFAULT_LEAD_ZEROS ? exp_diff : DEFAULT_LEAD_ZEROS;
-      m_x <<= left_shift;
+      m_x = static_cast<U>(m_x << left_shift);
       exp_diff -= left_shift;
     }
 
-    m_x %= m_y;
+    m_x = static_cast<U>(m_x % m_y);
     if (LIBC_UNLIKELY(m_x == 0))
       return FPB::zero();
 

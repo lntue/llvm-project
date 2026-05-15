@@ -23,8 +23,7 @@ template <typename Vector, typename Mask>
 LIBC_NO_SANITIZE_OOB_ACCESS LIBC_INLINE static Mask
 compare_and_mask(const Vector *block_ptr, char c);
 
-template <typename Vector, typename Mask,
-          decltype(compare_and_mask<Vector, Mask>)>
+template <typename Vector, typename Mask, Mask (*)(const Vector *, char)>
 LIBC_NO_SANITIZE_OOB_ACCESS LIBC_INLINE static size_t
 string_length_vector(const char *src) {
   uintptr_t misalign_bytes = reinterpret_cast<uintptr_t>(src) % sizeof(Vector);
@@ -55,8 +54,7 @@ calculate_find_first_character_return(const unsigned char *src, Mask c_mask,
   return const_cast<unsigned char *>(src) + c_offset;
 }
 
-template <typename Vector, typename Mask,
-          decltype(compare_and_mask<Vector, Mask>)>
+template <typename Vector, typename Mask, Mask (*)(const Vector *, char)>
 LIBC_NO_SANITIZE_OOB_ACCESS LIBC_INLINE static void *
 find_first_character_vector(const unsigned char *s, unsigned char c, size_t n) {
   uintptr_t misalign_bytes = reinterpret_cast<uintptr_t>(s) % sizeof(Vector);

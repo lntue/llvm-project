@@ -221,32 +221,35 @@ struct X87StateDescriptor {
 LIBC_INLINE static uint16_t x87_state_to_mxcsr(const X87StateDescriptor &s) {
   uint16_t mxcsr = 0;
   // Copy 6 exception flags from status word.
-  mxcsr = s.status_word & ExceptionFlags::ALL_F;
+  mxcsr = static_cast<uint16_t>(s.status_word & ExceptionFlags::ALL_F);
   // Copy 6 exception masks from control word.
-  mxcsr |= (s.control_word & ExceptionFlags::ALL_F)
-           << ExceptionFlags::MXCSR_EXCEPTION_MASK_BIT_POSITION;
+  mxcsr |= static_cast<uint16_t>(
+      (s.control_word & ExceptionFlags::ALL_F)
+      << ExceptionFlags::MXCSR_EXCEPTION_MASK_BIT_POSITION);
   // Copy 2-bit rounding control.
-  mxcsr |= (s.control_word & RoundingControl::X87_ROUNDING_MASK)
-           << (RoundingControl::MXCSR_BIT_POSITION -
-               RoundingControl::X87_BIT_POSITION);
+  mxcsr |= static_cast<uint16_t>(
+      (s.control_word & RoundingControl::X87_ROUNDING_MASK)
+      << (RoundingControl::MXCSR_BIT_POSITION -
+          RoundingControl::X87_BIT_POSITION));
   return mxcsr;
 }
 
 LIBC_INLINE static void mxcsr_to_x87_state(uint16_t mxcsr,
                                            X87StateDescriptor &s) {
   // Clear exception mask and rounding control.
-  s.control_word &=
-      ~(ExceptionFlags::ALL_F | RoundingControl::X87_ROUNDING_MASK);
+  s.control_word &= static_cast<uint16_t>(
+      ~(ExceptionFlags::ALL_F | RoundingControl::X87_ROUNDING_MASK));
   // Copy 6 exception masks.
-  s.control_word |=
+  s.control_word |= static_cast<uint16_t>(
       (mxcsr >> ExceptionFlags::MXCSR_EXCEPTION_MASK_BIT_POSITION) &
-      ExceptionFlags::ALL_F;
+      ExceptionFlags::ALL_F);
   // Copy rounding control.
   s.control_word |=
-      (mxcsr & RoundingControl::MXCSR_ROUNDING_MASK) >>
-      (RoundingControl::MXCSR_BIT_POSITION - RoundingControl::X87_BIT_POSITION);
+      static_cast<uint16_t>((mxcsr & RoundingControl::MXCSR_ROUNDING_MASK) >>
+                            (RoundingControl::MXCSR_BIT_POSITION -
+                             RoundingControl::X87_BIT_POSITION));
   // Clear exception flags
-  s.status_word &= ~ExceptionFlags::ALL_F;
+  s.status_word &= static_cast<uint16_t>(~ExceptionFlags::ALL_F);
   // Copy 6 exception status flags.
   s.status_word |= mxcsr & ExceptionFlags::ALL_F;
 }

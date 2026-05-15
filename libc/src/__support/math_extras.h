@@ -64,7 +64,7 @@ template <typename T>
 #if __has_builtin(__builtin_add_overflow)
   return __builtin_add_overflow(a, b, &res);
 #else
-  res = a + b;
+  res = static_cast<T>(a + b);
   return (res < a) || (res < b);
 #endif // __builtin_add_overflow
 }
@@ -75,7 +75,7 @@ template <typename T>
 #if __has_builtin(__builtin_sub_overflow)
   return __builtin_sub_overflow(a, b, &res);
 #else
-  res = a - b;
+  res = static_cast<T>(a - b);
   return (res > a);
 #endif // __builtin_sub_overflow
 }

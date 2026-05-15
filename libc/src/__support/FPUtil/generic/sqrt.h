@@ -47,7 +47,7 @@ LIBC_INLINE void normalize(int &exponent,
       cpp::countl_zero(mantissa) -
       (8 * static_cast<int>(sizeof(mantissa)) - 1 - FPBits<T>::FRACTION_LEN);
   exponent -= shift;
-  mantissa <<= shift;
+  mantissa = static_cast<typename FPBits<T>::StorageType>(mantissa << shift);
 }
 
 #ifdef LIBC_TYPES_LONG_DOUBLE_IS_FLOAT64
@@ -63,7 +63,7 @@ LIBC_INLINE void normalize<long double>(int &exponent, UInt128 &mantissa) {
       hi_bits ? (cpp::countl_zero(hi_bits) - 15)
               : (cpp::countl_zero(static_cast<uint64_t>(mantissa)) + 49);
   exponent -= shift;
-  mantissa <<= shift;
+  mantissa = static_cast<typename FPBits<T>::StorageType>(mantissa << shift);
 }
 #endif
 
@@ -92,7 +92,7 @@ sqrt(InType x) {
         DyadicFloat<cpp::bit_ceil(static_cast<size_t>(InFPBits::STORAGE_LEN))>;
 
     constexpr InStorageType ONE = InStorageType(1) << InFPBits::FRACTION_LEN;
-    constexpr auto FLT_NAN = OutFPBits::quiet_nan().get_val();
+    const auto FLT_NAN = OutFPBits::quiet_nan().get_val();
 
     InFPBits bits(x);
 
@@ -122,7 +122,7 @@ sqrt(InType x) {
       // Step 1b: Make sure the exponent is even.
       if (x_exp & 1) {
         --x_exp;
-        x_mant <<= 1;
+        x_mant = static_cast<InStorageType>(x_mant << 1);
       }
 
       // After step 1b, x = 2^(x_exp) * x_mant, where x_exp is even, and
@@ -138,31 +138,31 @@ sqrt(InType x) {
       //   y_n = 1 if 2*r(n-1) >= 2*y(n - 1) + 2^(-n-1)
       //         0 otherwise.
       InStorageType y = ONE;
-      InStorageType r = x_mant - ONE;
+      InStorageType r = static_cast<InStorageType>(x_mant - ONE);
 
       // TODO: Reduce iteration count to OutFPBits::FRACTION_LEN + 2 or + 3.
       for (InStorageType current_bit = ONE >> 1; current_bit;
-           current_bit >>= 1) {
-        r <<= 1;
+           current_bit = static_cast<InStorageType>(current_bit >> 1)) {
+        r = static_cast<InStorageType>(r << 1);
         // 2*y(n - 1) + 2^(-n-1)
         InStorageType tmp = static_cast<InStorageType>((y << 1) + current_bit);
         if (r >= tmp) {
-          r -= tmp;
-          y += current_bit;
+          r = static_cast<InStorageType>(r - tmp);
+          y = static_cast<InStorageType>(y + current_bit);
         }
       }
 
       // We compute one more iteration in order to round correctly.
-      r <<= 2;
-      y <<= 2;
-      InStorageType tmp = y + 1;
+      r = static_cast<InStorageType>(r << 2);
+      y = static_cast<InStorageType>(y << 2);
+      InStorageType tmp = static_cast<InStorageType>(y + 1);
       if (r >= tmp) {
-        r -= tmp;
+        r = static_cast<InStorageType>(r - tmp);
         // Rounding bit.
-        y |= 2;
+        y = static_cast<InStorageType>(y | 2);
       }
       // Sticky bit.
-      y |= static_cast<unsigned int>(r != 0);
+      y = static_cast<InStorageType>(y | static_cast<unsigned int>(r != 0));
 
       DyadicFloat yd(Sign::POS, (x_exp >> 1) - 2 - InFPBits::FRACTION_LEN, y);
       return yd.template as<OutType, /*ShouldSignalExceptions=*/true>();

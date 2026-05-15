@@ -757,7 +757,7 @@ public:
     int lz =
         UP::FRACTION_LEN + 1 - (UP::STORAGE_LEN - cpp::countl_zero(number));
 
-    number <<= lz;
+    number = static_cast<StorageType>(number << lz);
     ep -= lz;
 
     if (LIBC_LIKELY(ep >= 0)) {
@@ -765,7 +765,8 @@ public:
       result.set_significand(number);
       result.set_biased_exponent(static_cast<StorageType>(ep + 1));
     } else {
-      result.set_significand(number >> static_cast<unsigned>(-ep));
+      result.set_significand(
+          static_cast<StorageType>(number >> static_cast<unsigned>(-ep)));
     }
     return RetT(result.uintval());
   }

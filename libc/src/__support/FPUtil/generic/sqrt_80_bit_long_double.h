@@ -27,7 +27,7 @@ LIBC_INLINE void normalize(int &exponent,
       static_cast<size_t>(cpp::countl_zero(static_cast<uint64_t>(mantissa))) -
       (8 * sizeof(uint64_t) - 1 - FPBits<long double>::FRACTION_LEN));
   exponent -= shift;
-  mantissa <<= shift;
+  mantissa = static_cast<FPBits<long double>::StorageType>(mantissa << shift);
 }
 
 // if constexpr statement in sqrt.h still requires x86::sqrt to be declared
@@ -41,7 +41,7 @@ LIBC_INLINE long double sqrt(long double x) {
   using LDBits = FPBits<long double>;
   using StorageType = typename LDBits::StorageType;
   constexpr StorageType ONE = StorageType(1) << int(LDBits::FRACTION_LEN);
-  constexpr auto LDNAN = LDBits::quiet_nan().get_val();
+  const auto LDNAN = LDBits::quiet_nan().get_val();
 
   LDBits bits(x);
 

@@ -55,14 +55,15 @@ LIBC_INLINE constexpr T remquo(T x, T y, int &q) {
 
   NormalFloat<T> normalx(xbits), normaly(ybits);
   int exp = normalx.exponent - normaly.exponent;
-  typename NormalFloat<T>::StorageType mx = normalx.mantissa,
-                                       my = normaly.mantissa;
+  using StorageType = typename NormalFloat<T>::StorageType;
+  StorageType mx = normalx.mantissa, my = normaly.mantissa;
 
   q = 0;
   while (exp >= 0) {
     unsigned shift_count = 0;
-    typename NormalFloat<T>::StorageType n = mx;
-    for (shift_count = 0; n < my; n <<= 1, ++shift_count)
+    StorageType n = mx;
+    for (shift_count = 0; n < my;
+         n = static_cast<StorageType>(n << 1), ++shift_count)
       ;
 
     if (static_cast<int>(shift_count) > exp)
@@ -72,7 +73,7 @@ LIBC_INLINE constexpr T remquo(T x, T y, int &q) {
     if (0 <= exp && exp < QUOTIENT_LSB_BITS)
       q |= (1 << exp);
 
-    mx = n - my;
+    mx = static_cast<StorageType>(n - my);
     if (mx == 0) {
       q = result_sign.is_neg() ? -q : q;
       return LIBC_NAMESPACE::fputil::copysign(T(0.0), x);

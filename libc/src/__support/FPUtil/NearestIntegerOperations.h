@@ -212,8 +212,9 @@ round_using_specific_rounding_mode(T x, int rnd) {
   // If exponent is 0, trimSize will be equal to the mantissa width, and
   // truncIsOdd` will not be correct. So, we handle it as a special case
   // below.
-  StorageType trunc_is_odd =
-      new_bits.get_mantissa() & (StorageType(1) << trim_size);
+  StorageType trunc_is_odd = static_cast<StorageType>(
+      new_bits.get_mantissa() &
+      static_cast<StorageType>(StorageType(1) << trim_size));
 
   switch (rnd) {
   case FP_INT_DOWNWARD:

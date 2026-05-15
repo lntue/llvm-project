@@ -159,7 +159,8 @@ using Bin = details::Fmt<2>;
 using Oct = details::Fmt<8>;
 using Dec = details::Fmt<10>;
 using Hex = details::Fmt<16>;
-template <size_t radix> using Custom = details::Fmt<radix>;
+template <size_t radix>
+using Custom = details::Fmt<static_cast<uint8_t>(radix)>;
 
 } // namespace radix
 
@@ -385,7 +386,8 @@ template <typename T, typename Fmt = radix::Dec> class IntegerToString {
     LIBC_INLINE static void
     write_unsigned_number(UNSIGNED_T value,
                           details::BackwardStringBufferWriter &sink) {
-      for (; sink.ok() && value != 0; value /= Fmt::BASE) {
+      for (; sink.ok() && value != 0;
+           value = static_cast<UNSIGNED_T>(value / Fmt::BASE)) {
         const uint8_t digit(static_cast<uint8_t>(value % Fmt::BASE));
         sink.push(digit_char(digit));
       }

@@ -109,11 +109,11 @@ div(InType x, InType y) {
   InStorageType yd_mant_in = static_cast<InStorageType>(yd.mantissa >> 1);
 
   for (int i = 0; i < NUM_ITERS; ++i) {
-    q <<= 1;
-    r <<= 1;
+    q = static_cast<InStorageType>(q << 1);
+    r = static_cast<InStorageType>(r << 1);
     if (r >= yd_mant_in) {
-      q += 1;
-      r -= yd_mant_in;
+      q = static_cast<InStorageType>(q + 1);
+      r = static_cast<InStorageType>(r - yd_mant_in);
     }
   }
 

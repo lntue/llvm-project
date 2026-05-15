@@ -52,8 +52,8 @@ template <typename T> struct NormalFloat {
       return;
 
     unsigned normalization_shift = evaluate_normalization_shift(mantissa);
-    mantissa <<= normalization_shift;
-    exponent -= normalization_shift;
+    mantissa = static_cast<StorageType>(mantissa << normalization_shift);
+    exponent -= static_cast<int32_t>(normalization_shift);
   }
 
   LIBC_INLINE constexpr explicit NormalFloat(T x) {
@@ -114,20 +114,21 @@ template <typename T> struct NormalFloat {
       if (shift <= FPBits<T>::FRACTION_LEN + 1) {
         // Generate a subnormal number. Might lead to loss of precision.
         // We round to nearest and round halfway cases to even.
-        const StorageType shift_out_mask =
-            static_cast<StorageType>(StorageType(1) << shift) - 1;
-        const StorageType shift_out_value = mantissa & shift_out_mask;
+        const StorageType shift_out_mask = static_cast<StorageType>(
+            static_cast<StorageType>(StorageType(1) << shift) - 1);
+        const StorageType shift_out_value =
+            static_cast<StorageType>(mantissa & shift_out_mask);
         const StorageType halfway_value =
             static_cast<StorageType>(StorageType(1) << (shift - 1));
         result.set_biased_exponent(0);
-        result.set_mantissa(mantissa >> shift);
+        result.set_mantissa(static_cast<StorageType>(mantissa >> shift));
         StorageType new_mantissa = result.get_mantissa();
         if (shift_out_value > halfway_value) {
-          new_mantissa += 1;
+          new_mantissa = static_cast<StorageType>(new_mantissa + 1);
         } else if (shift_out_value == halfway_value) {
           // Round to even.
           if (result.get_mantissa() & 0x1)
-            new_mantissa += 1;
+            new_mantissa = static_cast<StorageType>(new_mantissa + 1);
         }
         result.set_mantissa(new_mantissa);
         // Adding 1 to mantissa can lead to overflow. This can only happen if
@@ -173,7 +174,7 @@ private:
   LIBC_INLINE constexpr unsigned evaluate_normalization_shift(StorageType m) {
     unsigned shift = 0;
     for (; (ONE & m) == 0 && (shift < FPBits<T>::FRACTION_LEN);
-         m <<= 1, ++shift)
+         m = static_cast<StorageType>(m << 1), ++shift)
       ;
     return shift;
   }

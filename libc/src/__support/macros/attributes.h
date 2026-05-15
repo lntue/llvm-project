@@ -137,10 +137,23 @@ LIBC_THREAD_MODE_EXTERNAL.
 // Disable regular and hardware-supported ASan for functions that may
 // intentionally make out-of-bounds access. Disable TSan as well, as it detects
 // out-of-bounds accesses to heap memory.
+#if defined(__clang__)
 #define LIBC_NO_SANITIZE_OOB_ACCESS                                            \
   __attribute__((no_sanitize("address", "hwaddress", "thread")))
 #else
+#define LIBC_NO_SANITIZE_OOB_ACCESS                                            \
+  __attribute__((no_sanitize("address", "thread")))
+#endif
+#else
 #define LIBC_NO_SANITIZE_OOB_ACCESS
+#endif
+
+#include "src/__support/macros/properties/compiler.h"
+#if LIBC_HAS_BUILTIN_IS_CONSTANT_EVALUATED && LIBC_HAS_BUILTIN_BIT_CAST &&     \
+    (!defined(LIBC_COMPILER_IS_GCC) || (LIBC_COMPILER_GCC_VER >= 900))
+#define LIBC_MATH_CONSTEXPR constexpr
+#else
+#define LIBC_MATH_CONSTEXPR
 #endif
 
 #endif // LLVM_LIBC_SRC___SUPPORT_MACROS_ATTRIBUTES_H

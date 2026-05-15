@@ -156,7 +156,7 @@ inline_memcpy_x86_avx_ge64_sw_prefetching(Ptr __restrict dst,
   // If we are using the Non-temporal stores, we don't need prefetching
   bool need_prefetch_run = true;
   if constexpr (x86::K_NTA_THRESHOLD != 0) {
-    if (count >= x86::K_NTA_THRESHOLD) {
+    if (count >= (x86::K_NTA_THRESHOLD ? x86::K_NTA_THRESHOLD : 1)) {
       while (offset + K_THREE_CACHELINES + 64 <= count) {
         for (size_t i = 0; i < 3; ++i, offset += K_ONE_CACHELINE) {
           generic::stream(dst + offset, generic::load<__m256i>(src + offset));

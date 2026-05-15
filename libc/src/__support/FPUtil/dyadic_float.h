@@ -124,7 +124,7 @@ template <size_t Bits> struct DyadicFloat {
   LIBC_INLINE constexpr DyadicFloat &shift_left(unsigned shift_length) {
     if (shift_length < Bits) {
       exponent -= static_cast<int>(shift_length);
-      mantissa <<= shift_length;
+      mantissa = static_cast<MantissaType>(mantissa << shift_length);
     } else {
       exponent = 0;
       mantissa = MantissaType(0);
@@ -146,7 +146,7 @@ template <size_t Bits> struct DyadicFloat {
 
   // Assume that it is already normalized.  Output the unbiased exponent.
   LIBC_INLINE constexpr int get_unbiased_exponent() const {
-    return exponent + (Bits - 1);
+    return exponent + static_cast<int>(Bits - 1);
   }
 
   // Produce a correctly rounded DyadicFloat from a too-large mantissa,
@@ -319,7 +319,8 @@ template <size_t Bits> struct DyadicFloat {
     if (LIBC_UNLIKELY(exp_hi <= 0)) {
       // Output is denormal.
       denorm = true;
-      shift = (Bits - PRECISION) + static_cast<uint32_t>(1 - exp_hi);
+      shift = static_cast<uint32_t>((Bits - PRECISION) +
+                                    static_cast<uint32_t>(1 - exp_hi));
 
       exp_hi = FPBits<T>::EXP_BIAS;
     }
@@ -673,8 +674,8 @@ rounded_div(const DyadicFloat<Bits> &af, const DyadicFloat<Bits> &bf) {
   }
 
   DyadicFloat<(Bits * 2)> qbig(qf.sign, qf.exponent - 2, q);
-  return DyadicFloat<Bits>::round(qbig.sign, qbig.exponent + Bits,
-                                  qbig.mantissa, Bits);
+  return DyadicFloat<Bits>::round(
+      qbig.sign, qbig.exponent + static_cast<int>(Bits), qbig.mantissa, Bits);
 }
 
 // Simple polynomial approximation.

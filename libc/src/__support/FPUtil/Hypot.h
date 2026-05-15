@@ -29,7 +29,8 @@ template <typename T>
 LIBC_INLINE T find_leading_one(T mant, int &shift_length) {
   shift_length = 0;
   if (mant > 0) {
-    shift_length = (sizeof(mant) * 8) - 1 - cpp::countl_zero(mant);
+    shift_length = static_cast<int>(
+        (sizeof(mant) * 8) - 1 - static_cast<size_t>(cpp::countl_zero(mant)));
   }
   return static_cast<T>((T(1) << shift_length));
 }
@@ -156,8 +157,8 @@ LIBC_INLINE T hypot(T x, T y) {
   // Add an extra bit to simplify the final rounding bit computation.
   constexpr StorageType ONE = StorageType(1) << (FPBits_t::FRACTION_LEN + 1);
 
-  a_mant <<= 1;
-  b_mant <<= 1;
+  a_mant = static_cast<StorageType>(a_mant << 1);
+  b_mant = static_cast<StorageType>(b_mant << 1);
 
   StorageType leading_one;
   int y_mant_width;
@@ -207,39 +208,43 @@ LIBC_INLINE T hypot(T x, T y) {
     } else {
       // For denormal result, we simply move the leading bit of the result to
       // the left by 1.
-      leading_one <<= 1;
+      leading_one = static_cast<StorageType>(leading_one << 1);
       ++y_mant_width;
     }
   }
 
   StorageType y_new = leading_one;
-  StorageType r = static_cast<StorageType>(sum >> y_mant_width) - leading_one;
-  StorageType tail_bits = static_cast<StorageType>(sum) & (leading_one - 1);
+  StorageType r = static_cast<StorageType>(
+      static_cast<StorageType>(sum >> y_mant_width) - leading_one);
+  StorageType tail_bits =
+      static_cast<StorageType>(static_cast<StorageType>(sum) &
+                               static_cast<StorageType>(leading_one - 1));
 
-  for (StorageType current_bit = leading_one >> 1; current_bit;
-       current_bit >>= 1) {
-    r = static_cast<StorageType>((r << 1) +
+  for (StorageType current_bit = static_cast<StorageType>(leading_one >> 1);
+       current_bit; current_bit = static_cast<StorageType>(current_bit >> 1)) {
+    r = static_cast<StorageType>(static_cast<StorageType>(r << 1) +
                                  ((tail_bits & current_bit) ? 1 : 0));
-    StorageType tmp = static_cast<StorageType>((y_new << 1)) +
-                      current_bit; // 2*y_new(n - 1) + 2^(-n)
+    StorageType tmp =
+        static_cast<StorageType>(static_cast<StorageType>(y_new << 1) +
+                                 current_bit); // 2*y_new(n - 1) + 2^(-n)
     if (r >= tmp) {
-      r -= tmp;
-      y_new += current_bit;
+      r = static_cast<StorageType>(r - tmp);
+      y_new = static_cast<StorageType>(y_new + current_bit);
     }
   }
 
-  bool round_bit = y_new & StorageType(1);
-  bool lsb = y_new & StorageType(2);
+  bool round_bit = (y_new & StorageType(1)) != 0;
+  bool lsb = (y_new & StorageType(2)) != 0;
 
   if (y_new >= ONE) {
-    y_new -= ONE;
+    y_new = static_cast<StorageType>(y_new - ONE);
 
     if (out_exp == 0) {
       out_exp = 1;
     }
   }
 
-  y_new >>= 1;
+  y_new = static_cast<StorageType>(y_new >> 1);
 
   // Round to the nearest, tie to even.
   int round_mode = quick_get_round();
@@ -247,16 +252,16 @@ LIBC_INLINE T hypot(T x, T y) {
   case FE_TONEAREST:
     // Round to nearest, ties to even
     if (round_bit && (lsb || sticky_bits || (r != 0)))
-      ++y_new;
+      y_new = static_cast<StorageType>(y_new + 1);
     break;
   case FE_UPWARD:
     if (round_bit || sticky_bits || (r != 0))
-      ++y_new;
+      y_new = static_cast<StorageType>(y_new + 1);
     break;
   }
 
   if (y_new >= (ONE >> 1)) {
-    y_new -= ONE >> 1;
+    y_new = static_cast<StorageType>(y_new - (ONE >> 1));
     ++out_exp;
     if (out_exp >= FPBits_t::MAX_BIASED_EXPONENT) {
       if (round_mode == FE_TONEAREST || round_mode == FE_UPWARD)
@@ -265,7 +270,8 @@ LIBC_INLINE T hypot(T x, T y) {
     }
   }
 
-  y_new |= static_cast<StorageType>(out_exp) << FPBits_t::FRACTION_LEN;
+  y_new = static_cast<StorageType>(
+      y_new | (static_cast<StorageType>(out_exp) << FPBits_t::FRACTION_LEN));
 
   if (!(round_bit || sticky_bits || (r != 0)))
     fputil::clear_except_if_required(FE_INEXACT);

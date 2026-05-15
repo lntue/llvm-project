@@ -122,8 +122,13 @@ LIBC_INLINE int set_env(const fenv_t *) { return 0; }
 
 namespace LIBC_NAMESPACE_DECL {
 namespace fputil {
+#if LIBC_HAS_BUILTIN_IS_CONSTANT_EVALUATED
+#define LIBC_FENV_CONSTEXPR constexpr
+#else
+#define LIBC_FENV_CONSTEXPR
+#endif
 
-LIBC_INLINE static constexpr int
+LIBC_INLINE static LIBC_FENV_CONSTEXPR int
 clear_except_if_required([[maybe_unused]] int excepts) {
   if (cpp::is_constant_evaluated()) {
     return 0;
@@ -136,7 +141,7 @@ clear_except_if_required([[maybe_unused]] int excepts) {
   }
 }
 
-LIBC_INLINE static constexpr int
+LIBC_INLINE static LIBC_FENV_CONSTEXPR int
 set_except_if_required([[maybe_unused]] int excepts) {
   if (cpp::is_constant_evaluated()) {
     return 0;
@@ -149,7 +154,7 @@ set_except_if_required([[maybe_unused]] int excepts) {
   }
 }
 
-LIBC_INLINE static constexpr int
+LIBC_INLINE static LIBC_FENV_CONSTEXPR int
 raise_except_if_required([[maybe_unused]] int excepts) {
   if (cpp::is_constant_evaluated()) {
     return 0;
@@ -162,13 +167,13 @@ raise_except_if_required([[maybe_unused]] int excepts) {
   }
 }
 
-LIBC_INLINE static constexpr void
+LIBC_INLINE static LIBC_FENV_CONSTEXPR void
 set_errno_if_required([[maybe_unused]] int err) {
-  if (!cpp::is_constant_evaluated()) {
-#ifndef LIBC_MATH_HAS_NO_ERRNO
+  if (cpp::is_constant_evaluated()) {
+    return;
+  } else {
     if (math_errhandling & MATH_ERRNO)
       libc_errno = err;
-#endif // LIBC_MATH_HAS_NO_ERRNO
   }
 }
 

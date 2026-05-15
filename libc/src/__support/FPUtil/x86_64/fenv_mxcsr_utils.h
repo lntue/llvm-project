@@ -152,7 +152,8 @@ LIBC_INLINE static uint16_t get_round() {
 
 LIBC_INLINE static void set_round(uint16_t rounding_mode) {
   uint32_t mxcsr = get_mxcsr();
-  rounding_mode <<= RoundingControl::MXCSR_BIT_POSITION;
+  rounding_mode = static_cast<uint16_t>(rounding_mode
+                                        << RoundingControl::MXCSR_BIT_POSITION);
   // Clear rounding bits.
   mxcsr &= (~RoundingControl::MXCSR_ROUNDING_MASK);
   write_mxcsr(mxcsr | rounding_mode);

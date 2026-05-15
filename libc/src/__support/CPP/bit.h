@@ -114,14 +114,14 @@ countr_zero(T value) {
   // Bisection method.
   unsigned zero_bits = 0;
   unsigned shift = cpp::numeric_limits<T>::digits >> 1;
-  T mask = cpp::numeric_limits<T>::max() >> shift;
+  T mask = static_cast<T>(cpp::numeric_limits<T>::max() >> shift);
   while (shift) {
     if ((value & mask) == 0) {
-      value >>= shift;
+      value = static_cast<T>(value >> shift);
       zero_bits |= shift;
     }
     shift >>= 1;
-    mask >>= shift;
+    mask = static_cast<T>(mask >> shift);
   }
   return static_cast<int>(zero_bits);
 }
@@ -162,7 +162,7 @@ countl_zero(T value) {
   unsigned zero_bits = 0;
   for (unsigned shift = cpp::numeric_limits<T>::digits >> 1; shift;
        shift >>= 1) {
-    T tmp = value >> shift;
+    T tmp = static_cast<T>(value >> shift);
     if (tmp)
       value = tmp;
     else

@@ -229,12 +229,14 @@ LIBC_INLINE constexpr void quick_mul_hi(cpp::array<word, N> &dst,
   word carry = 0;
   // First round of accumulation for those at N - 1 in the full product.
   for (size_t i = 0; i < N; ++i)
-    carry += mul_add_with_carry(acc, lhs[i], rhs[N - 1 - i]);
+    carry = static_cast<word>(carry +
+                              mul_add_with_carry(acc, lhs[i], rhs[N - 1 - i]));
   for (size_t i = N; i < 2 * N - 1; ++i) {
     acc.advance(carry);
     carry = 0;
     for (size_t j = i - N + 1; j < N; ++j)
-      carry += mul_add_with_carry(acc, lhs[j], rhs[i - j]);
+      carry = static_cast<word>(carry +
+                                mul_add_with_carry(acc, lhs[j], rhs[i - j]));
     dst[i - N] = acc.sum();
   }
   dst.back() = acc.carry();
@@ -260,7 +262,8 @@ LIBC_INLINE constexpr cpp::array<word, N> shift(cpp::array<word, N> array,
 #ifdef LIBC_TYPES_HAS_INT128
   constexpr size_t TOTAL_BITS = N * WORD_BITS;
   if constexpr (TOTAL_BITS == 128 &&
-                __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) {
+                __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ &&
+                LIBC_HAS_BUILTIN_BIT_CAST) {
     using type = cpp::conditional_t<is_signed, __int128_t, __uint128_t>;
     auto tmp = cpp::bit_cast<type>(array);
     if constexpr (direction == LEFT)
@@ -366,7 +369,7 @@ public:
   LIBC_INLINE constexpr BigInt(
       const BigInt<OtherBits, OtherSigned, OtherWordType> &other) {
     using BigIntOther = BigInt<OtherBits, OtherSigned, OtherWordType>;
-    const bool should_sign_extend = Signed && other.is_neg();
+    [[maybe_unused]] const bool should_sign_extend = Signed && other.is_neg();
 
     static_assert(!(Bits == OtherBits && WORD_SIZE != BigIntOther::WORD_SIZE) &&
                   "This is currently untested for casting between bigints with "
@@ -524,8 +527,11 @@ public:
       return lo;
     constexpr size_t MAX_COUNT =
         T_SIZE > Bits ? WORD_COUNT : T_SIZE / WORD_SIZE;
-    for (size_t i = 1; i < MAX_COUNT; ++i)
-      lo += static_cast<T>(static_cast<T>(val[i]) << (WORD_SIZE * i));
+    if constexpr (MAX_COUNT > 1) {
+      for (size_t i = 1; i < MAX_COUNT; ++i)
+        lo = static_cast<T>(
+            lo + static_cast<T>(static_cast<T>(val[i]) << (WORD_SIZE * i)));
+    }
     if constexpr (Signed && (T_SIZE > Bits)) {
       // Extend sign for negative numbers.
       constexpr T MASK = (~T(0) << Bits);
@@ -852,10 +858,10 @@ public:
       result[i] = lhs[i] OP rhs[i];                                            \
     return result;                                                             \
   }                                                                            \
-  LIBC_INLINE friend constexpr BigInt operator OP##=(BigInt &lhs,              \
-                                                     const BigInt &rhs) {      \
+  LIBC_INLINE friend constexpr BigInt operator OP## =                          \
+      (BigInt & lhs, const BigInt &rhs) {                                      \
     for (size_t i = 0; i < WORD_COUNT; ++i)                                    \
-      lhs[i] OP## = rhs[i];                                                    \
+      lhs[i] = static_cast<WordType>(lhs[i] OP rhs[i]);                        \
     return lhs;                                                                \
   }
 

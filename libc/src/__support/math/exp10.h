@@ -286,7 +286,7 @@ LIBC_INLINE constexpr double exp10_set_exceptional(double x) {
 
 namespace math {
 
-LIBC_INLINE constexpr double exp10(double x) {
+LIBC_INLINE LIBC_MATH_CONSTEXPR double exp10(double x) {
   using FPBits = typename fputil::FPBits<double>;
   FPBits xbits(x);
 

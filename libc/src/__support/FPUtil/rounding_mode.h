@@ -80,7 +80,13 @@ LIBC_INLINE int quick_get_round() {
 
 } // namespace generic
 
-LIBC_INLINE constexpr bool fenv_is_round_up() {
+#if LIBC_HAS_BUILTIN_IS_CONSTANT_EVALUATED
+#define LIBC_ROUNDING_MODE_CONSTEXPR constexpr
+#else
+#define LIBC_ROUNDING_MODE_CONSTEXPR
+#endif
+
+LIBC_INLINE LIBC_ROUNDING_MODE_CONSTEXPR bool fenv_is_round_up() {
   if (cpp::is_constant_evaluated()) {
     return false;
   } else {
@@ -88,7 +94,7 @@ LIBC_INLINE constexpr bool fenv_is_round_up() {
   }
 }
 
-LIBC_INLINE constexpr bool fenv_is_round_down() {
+LIBC_INLINE LIBC_ROUNDING_MODE_CONSTEXPR bool fenv_is_round_down() {
   if (cpp::is_constant_evaluated()) {
     return false;
   } else {
@@ -96,7 +102,7 @@ LIBC_INLINE constexpr bool fenv_is_round_down() {
   }
 }
 
-LIBC_INLINE constexpr bool fenv_is_round_to_nearest() {
+LIBC_INLINE LIBC_ROUNDING_MODE_CONSTEXPR bool fenv_is_round_to_nearest() {
   if (cpp::is_constant_evaluated()) {
     return true;
   } else {
@@ -104,7 +110,7 @@ LIBC_INLINE constexpr bool fenv_is_round_to_nearest() {
   }
 }
 
-LIBC_INLINE constexpr bool fenv_is_round_to_zero() {
+LIBC_INLINE LIBC_ROUNDING_MODE_CONSTEXPR bool fenv_is_round_to_zero() {
   if (cpp::is_constant_evaluated()) {
     return false;
   } else {
@@ -113,7 +119,7 @@ LIBC_INLINE constexpr bool fenv_is_round_to_zero() {
 }
 
 // Quick free standing get rounding mode based on the above observations.
-LIBC_INLINE constexpr int quick_get_round() {
+LIBC_INLINE LIBC_ROUNDING_MODE_CONSTEXPR int quick_get_round() {
   if (cpp::is_constant_evaluated()) {
     return FE_TONEAREST;
   } else {

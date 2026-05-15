@@ -55,7 +55,8 @@ LIBC_INLINE static int test_except(int excepts) {
   uint16_t tested_excepts = sse::test_except(x86_excepts);
 
 #ifdef LIBC_TYPES_LONG_DOUBLE_IS_X86_FLOAT80
-  tested_excepts |= x87::test_except(x86_excepts);
+  tested_excepts =
+      static_cast<uint16_t>(tested_excepts | x87::test_except(x86_excepts));
 #endif // LIBC_TYPES_LONG_DOUBLE_IS_X86_FLOAT80
 
   return internal::get_macro_from_exception_status(tested_excepts);
@@ -65,7 +66,7 @@ LIBC_INLINE static int get_except() {
   uint16_t excepts = sse::get_except();
 
 #ifdef LIBC_TYPES_LONG_DOUBLE_IS_X86_FLOAT80
-  excepts |= x87::get_except();
+  excepts = static_cast<uint16_t>(excepts | x87::get_except());
 #endif // LIBC_TYPES_LONG_DOUBLE_IS_X86_FLOAT80
 
   return internal::get_macro_from_exception_status(excepts);
@@ -96,7 +97,8 @@ LIBC_INLINE static int enable_except(int excepts) {
   uint16_t old_excepts = sse::enable_except(x86_excepts);
 
 #ifdef LIBC_TYPES_LONG_DOUBLE_IS_X86_FLOAT80
-  old_excepts |= x87::enable_except(x86_excepts);
+  old_excepts =
+      static_cast<uint16_t>(old_excepts | x87::enable_except(x86_excepts));
 #endif // LIBC_TYPES_LONG_DOUBLE_IS_X86_FLOAT80
 
   return internal::get_macro_from_exception_status(old_excepts);
@@ -107,7 +109,8 @@ LIBC_INLINE static int disable_except(int excepts) {
   uint16_t old_excepts = sse::disable_except(x86_excepts);
 
 #ifdef LIBC_TYPES_LONG_DOUBLE_IS_X86_FLOAT80
-  old_excepts |= x87::disable_except(x86_excepts);
+  old_excepts =
+      static_cast<uint16_t>(old_excepts | x87::disable_except(x86_excepts));
 #endif // LIBC_TYPES_LONG_DOUBLE_IS_X86_FLOAT80
 
   return internal::get_macro_from_exception_status(old_excepts);

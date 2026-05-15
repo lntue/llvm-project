@@ -165,11 +165,13 @@ add_or_sub(InType x, InType y) {
     // min_bits must be subnormal too.
 
     if (is_effectively_add)
-      result_mant = max_bits.get_mantissa() + min_bits.get_mantissa();
+      result_mant = static_cast<InStorageType>(max_bits.get_mantissa() +
+                                               min_bits.get_mantissa());
     else
-      result_mant = max_bits.get_mantissa() - min_bits.get_mantissa();
+      result_mant = static_cast<InStorageType>(max_bits.get_mantissa() -
+                                               min_bits.get_mantissa());
 
-    result_mant <<= GUARD_BITS_LEN;
+    result_mant = static_cast<InStorageType>(result_mant << GUARD_BITS_LEN);
   } else {
     InStorageType max_mant = static_cast<InStorageType>(
         max_bits.get_explicit_mantissa() << GUARD_BITS_LEN);
@@ -196,9 +198,11 @@ add_or_sub(InType x, InType y) {
         static_cast<InStorageType>(static_cast<int>(aligned_min_mant_sticky));
 
     if (is_effectively_add)
-      result_mant = max_mant + (aligned_min_mant | min_mant_sticky);
+      result_mant = static_cast<InStorageType>(
+          max_mant + (aligned_min_mant | min_mant_sticky));
     else
-      result_mant = max_mant - (aligned_min_mant | min_mant_sticky);
+      result_mant = static_cast<InStorageType>(
+          max_mant - (aligned_min_mant | min_mant_sticky));
   }
 
   int result_exp = max_bits.get_explicit_exponent() - RESULT_FRACTION_LEN;

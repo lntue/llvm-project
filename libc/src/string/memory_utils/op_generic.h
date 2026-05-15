@@ -149,7 +149,8 @@ template <typename T> void store(Ptr dst, T value) {
 template <typename T> T splat(uint8_t value) {
   static_assert(is_scalar_v<T> || is_vector_v<T>);
   if constexpr (is_scalar_v<T>)
-    return T(~0) / T(0xFF) * T(value);
+    return static_cast<T>(static_cast<T>(~0) / static_cast<T>(0xFF) *
+                          static_cast<T>(value));
   else if constexpr (is_vector_v<T>) {
     T out;
     // This for loop is optimized out for vector types.

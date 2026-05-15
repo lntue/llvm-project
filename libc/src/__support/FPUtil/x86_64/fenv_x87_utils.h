@@ -178,9 +178,10 @@ LIBC_INLINE static uint16_t get_round() {
 
 LIBC_INLINE static void set_round(uint16_t rounding_mode) {
   uint16_t x87_control = get_x87_control_word();
-  rounding_mode <<= RoundingControl::X87_BIT_POSITION;
-  uint16_t x87_control_new =
-      (x87_control & (~RoundingControl::X87_ROUNDING_MASK)) | rounding_mode;
+  rounding_mode =
+      static_cast<uint16_t>(rounding_mode << RoundingControl::X87_BIT_POSITION);
+  uint16_t x87_control_new = static_cast<uint16_t>(
+      (x87_control & (~RoundingControl::X87_ROUNDING_MASK)) | rounding_mode);
   // Only update if rounding mode changes.
   if (x87_control_new != x87_control)
     write_x87_control_word(x87_control_new);

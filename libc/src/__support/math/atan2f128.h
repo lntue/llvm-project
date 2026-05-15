@@ -81,33 +81,31 @@ namespace math {
 // and relative errors bounded by:
 //   |(atan(u) - P(u)) / P(u)| < 2^-114.
 
-LIBC_INLINE constexpr float128 atan2f128(float128 y, float128 x) {
-  using Float128 = fputil::DyadicFloat<128>;
+LIBC_INLINE LIBC_MATH_CONSTEXPR float128 atan2f128(float128 y, float128 x) {
+  using DF128 = fputil::DyadicFloat<128>;
 
-  constexpr Float128 ZERO = {Sign::POS, 0, 0_u128};
-  constexpr Float128 MZERO = {Sign::NEG, 0, 0_u128};
-  constexpr Float128 PI = {Sign::POS, -126,
-                           0xc90fdaa2'2168c234'c4c6628b'80dc1cd1_u128};
-  constexpr Float128 MPI = {Sign::NEG, -126,
-                            0xc90fdaa2'2168c234'c4c6628b'80dc1cd1_u128};
-  constexpr Float128 PI_OVER_2 = {Sign::POS, -127,
-                                  0xc90fdaa2'2168c234'c4c6628b'80dc1cd1_u128};
-  constexpr Float128 MPI_OVER_2 = {Sign::NEG, -127,
-                                   0xc90fdaa2'2168c234'c4c6628b'80dc1cd1_u128};
-  constexpr Float128 PI_OVER_4 = {Sign::POS, -128,
-                                  0xc90fdaa2'2168c234'c4c6628b'80dc1cd1_u128};
-  constexpr Float128 THREE_PI_OVER_4 = {
+  constexpr DF128 ZERO = {Sign::POS, 0, 0_u128};
+  constexpr DF128 MZERO = {Sign::NEG, 0, 0_u128};
+  constexpr DF128 PI = {Sign::POS, -126,
+                        0xc90fdaa2'2168c234'c4c6628b'80dc1cd1_u128};
+  constexpr DF128 MPI = {Sign::NEG, -126,
+                         0xc90fdaa2'2168c234'c4c6628b'80dc1cd1_u128};
+  constexpr DF128 PI_OVER_2 = {Sign::POS, -127,
+                               0xc90fdaa2'2168c234'c4c6628b'80dc1cd1_u128};
+  constexpr DF128 MPI_OVER_2 = {Sign::NEG, -127,
+                                0xc90fdaa2'2168c234'c4c6628b'80dc1cd1_u128};
+  constexpr DF128 PI_OVER_4 = {Sign::POS, -128,
+                               0xc90fdaa2'2168c234'c4c6628b'80dc1cd1_u128};
+  constexpr DF128 THREE_PI_OVER_4 = {
       Sign::POS, -128, 0x96cbe3f9'990e91a7'9394c9e8'a0a5159d_u128};
 
   // Adjustment for constant term:
   //   CONST_ADJ[x_sign][y_sign][recip]
-  constexpr Float128 CONST_ADJ[2][2][2] = {
-      {{ZERO, MPI_OVER_2}, {MZERO, MPI_OVER_2}},
-      {{MPI, PI_OVER_2}, {MPI, PI_OVER_2}}};
+  const DF128 CONST_ADJ[2][2][2] = {{{ZERO, MPI_OVER_2}, {MZERO, MPI_OVER_2}},
+                                    {{MPI, PI_OVER_2}, {MPI, PI_OVER_2}}};
 
   using namespace atan_internal;
   using FPBits = fputil::FPBits<float128>;
-  using Float128 = fputil::DyadicFloat<128>;
 
   FPBits x_bits(x), y_bits(y);
   bool x_sign = x_bits.sign().is_neg();
@@ -139,7 +137,7 @@ LIBC_INLINE constexpr float128 atan2f128(float128 y, float128 x) {
     //   0: zero
     //   1: finite, non-zero
     //   2: infinity
-    constexpr Float128 EXCEPTS[3][3][2] = {
+    const DF128 EXCEPTS[3][3][2] = {
         {{ZERO, PI}, {ZERO, PI}, {ZERO, PI}},
         {{PI_OVER_2, PI_OVER_2}, {ZERO, ZERO}, {ZERO, PI}},
         {{PI_OVER_2, PI_OVER_2},
@@ -148,7 +146,7 @@ LIBC_INLINE constexpr float128 atan2f128(float128 y, float128 x) {
     };
 
     if ((x_except != 1) || (y_except != 1)) {
-      Float128 r = EXCEPTS[y_except][x_except][x_sign];
+      DF128 r = EXCEPTS[y_except][x_except][x_sign];
       if (y_sign)
         r.sign = r.sign.negate();
       return static_cast<float128>(r);
@@ -156,13 +154,13 @@ LIBC_INLINE constexpr float128 atan2f128(float128 y, float128 x) {
   }
 
   bool final_sign = ((x_sign != y_sign) != recip);
-  Float128 const_term = CONST_ADJ[x_sign][y_sign][recip];
+  DF128 const_term = CONST_ADJ[x_sign][y_sign][recip];
   int exp_diff = den.exponent - num.exponent;
   // We have the following bound for normalized n and d:
   //   2^(-exp_diff - 1) < n/d < 2^(-exp_diff + 1).
   if (LIBC_UNLIKELY(exp_diff > FPBits::FRACTION_LEN + 2)) {
-    Float128 quotient = rounded_div(num, den);
-    Float128 result = quick_add(const_term, quotient);
+    DF128 quotient = rounded_div(num, den);
+    DF128 result = quick_add(const_term, quotient);
     if (final_sign)
       result.sign = result.sign.negate();
     return static_cast<float128>(result);
@@ -182,22 +180,22 @@ LIBC_INLINE constexpr float128 atan2f128(float128 y, float128 x) {
   unsigned idx = static_cast<unsigned>(k);
 
   // k_f128 = idx / 64
-  Float128 k_f128(Sign::POS, -6, Float128::MantissaType(idx));
+  DF128 k_f128(Sign::POS, -6, DF128::MantissaType(idx));
 
   // Range reduction:
   // atan(n/d) - atan(k) = atan((n/d - k/64) / (1 + (n/d) * (k/64)))
   //                     = atan((n - d * k/64)) / (d + n * k/64))
   // num_f128 = n - d * k/64
-  Float128 num_f128 = fputil::multiply_add(den, -k_f128, num);
+  DF128 num_f128 = fputil::multiply_add(den, -k_f128, num);
   // den_f128 = d + n * k/64
-  Float128 den_f128 = fputil::multiply_add(num, k_f128, den);
+  DF128 den_f128 = fputil::multiply_add(num, k_f128, den);
 
   // q = (n - d * k) / (d + n * k)
-  Float128 q = fputil::quick_mul(num_f128, fputil::approx_reciprocal(den_f128));
+  DF128 q = fputil::quick_mul(num_f128, fputil::approx_reciprocal(den_f128));
   // p ~ atan(q)
-  Float128 p = atan_eval(q);
+  DF128 p = atan_eval(q);
 
-  Float128 r =
+  DF128 r =
       fputil::quick_add(const_term, fputil::quick_add(ATAN_I_F128[idx], p));
   if (final_sign)
     r.sign = r.sign.negate();
