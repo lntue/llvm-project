@@ -3,6 +3,7 @@ add_header_library(
   HDRS
     FEnvImpl.h
   DEPENDS
+    libc.hdr.errno_macros
     libc.hdr.types.fenv_t
     libc.hdr.fenv_macros
     libc.hdr.math_macros
@@ -21,10 +22,14 @@ add_header_library(
     rounding_mode.h
   DEPENDS
     libc.hdr.fenv_macros
+    libc.hdr.stdint_proxy
     libc.src.__support.CPP.type_traits
     libc.src.__support.macros.attributes
+    libc.src.__support.macros.config
     libc.src.__support.macros.optimization
     libc.src.__support.macros.properties.architectures
+    libc.src.__support.macros.properties.compiler
+    libc.src.__support.macros.properties.cpu_features
     libc.src.__support.macros.sanitizer
 )
 
@@ -203,19 +208,44 @@ add_header_library(
 )
 
 add_header_library(
+  fp_convert
+  HDRS
+    fp_convert.h
+  DEPENDS
+    .fp_bits
+    libc.hdr.fenv_macros
+    libc.hdr.stdint_proxy
+    libc.src.__support.CPP.bit
+    libc.src.__support.CPP.type_traits
+    libc.src.__support.macros.attributes
+    libc.src.__support.macros.config
+    libc.src.__support.macros.optimization
+    libc.src.__support.macros.properties.cpu_features
+    libc.src.__support.macros.properties.types
+    libc.src.__support.sign
+    libc.src.__support.uint128
+)
+
+add_header_library(
   dyadic_float
   HDRS
     dyadic_float.h
   DEPENDS
     .fenv_impl
     .fp_bits
+    .fp_convert
     .multiply_add
     .rounding_mode
     libc.hdr.errno_macros
     libc.hdr.fenv_macros
+    libc.src.__support.CPP.bit
     libc.src.__support.CPP.type_traits
     libc.src.__support.big_int
+    libc.src.__support.macros.attributes
+    libc.src.__support.macros.config
     libc.src.__support.macros.optimization
+    libc.src.__support.macros.properties.architectures
+    libc.src.__support.macros.properties.cpu_features
     libc.src.__support.macros.properties.types
 )
 
@@ -310,11 +340,17 @@ add_header_library(
   HDRS
     cast.h
   DEPENDS
-    .dyadic_float
+    .fenv_impl
     .fp_bits
+    .fp_convert
+    .rounding_mode
+    libc.hdr.errno_macros
     libc.hdr.fenv_macros
-    libc.src.__support.CPP.algorithm
     libc.src.__support.CPP.type_traits
+    libc.src.__support.macros.attributes
+    libc.src.__support.macros.config
+    libc.src.__support.macros.optimization
+    libc.src.__support.macros.properties.cpu_features
     libc.src.__support.macros.properties.types
 )
 

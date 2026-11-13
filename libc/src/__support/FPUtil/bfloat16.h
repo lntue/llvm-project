@@ -34,20 +34,27 @@ struct BFloat16 {
       : bits(static_cast<uint16_t>(0U)) {
     if constexpr (cpp::is_floating_point_v<T>) {
       bits = fputil::cast<bfloat16>(value).bits;
+    } else if constexpr (cpp::is_same_v<cpp::remove_cv_t<T>, bool>) {
+      bits = value ? static_cast<uint16_t>(0x3f80U) : static_cast<uint16_t>(0U);
     } else if constexpr (cpp::is_integral_v<T>) {
+      using UnsignedT = cpp::make_unsigned_t<T>;
       Sign sign = Sign::POS;
+      UnsignedT mag = static_cast<UnsignedT>(value);
 
       if constexpr (cpp::is_signed_v<T>) {
         if (value < 0) {
           sign = Sign::NEG;
-          value = -value;
+          mag = static_cast<UnsignedT>(UnsignedT(0) - mag);
         }
       }
 
-      fputil::DyadicFloat<cpp::numeric_limits<cpp::make_unsigned_t<T>>::digits>
-          xd(sign, 0, value);
+      constexpr size_t BITS = ((sizeof(T) * CHAR_BIT + 63) / 64) * 64;
+      fputil::DyadicFloat<BITS> xd(sign, 0, mag);
       bits = xd.template as<bfloat16, /*ShouldSignalExceptions=*/true>().bits;
 
+    } else if constexpr (is_dyadic_float_v<T>) {
+      bits =
+          value.template as<bfloat16, /*ShouldSignalExceptions=*/true>().bits;
     } else if constexpr (cpp::is_convertible_v<T, BFloat16>) {
       bits = value.operator BFloat16().bits;
     } else {
@@ -58,9 +65,8 @@ struct BFloat16 {
   template <cpp::enable_if_t<fputil::get_fp_type<float>() ==
                                  fputil::FPType::IEEE754_Binary32,
                              int> = 0>
-  LIBC_INLINE constexpr operator float() const {
-    uint32_t x_bits = static_cast<uint32_t>(bits) << 16U;
-    return cpp::bit_cast<float>(x_bits);
+  LIBC_INLINE LIBC_CONSTEXPR_DEFAULT operator float() const {
+    return fputil::cast<float>(*this);
   }
 
   template <typename T, cpp::enable_if_t<cpp::is_integral_v<T>, int> = 0>

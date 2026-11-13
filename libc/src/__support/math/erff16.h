@@ -15,6 +15,7 @@
 
 #include "src/__support/FPUtil/FEnvImpl.h"
 #include "src/__support/FPUtil/FPBits.h"
+#include "src/__support/FPUtil/cast.h"
 #include "src/__support/FPUtil/except_value_utils.h"
 #include "src/__support/FPUtil/multiply_add.h"
 #include "src/__support/macros/config.h"
@@ -117,7 +118,7 @@ LIBC_INLINE float16 erff16(float16 x) {
   uint16_t x_abs = xbits.abs().uintval();
   bool is_neg = xbits.is_neg();
 
-  float xf = fputil::cast<float16>(x);
+  float xf = fputil::cast<float>(x);
   if (auto r = ERFF16_EXCEPTS.lookup_odd(x_abs, is_neg);
       LIBC_UNLIKELY(r.has_value()))
     return r.value();

@@ -3243,6 +3243,7 @@ add_header_library(
   HDRS
     erff16.h
   DEPENDS
+    libc.src.__support.FPUtil.cast
     libc.src.__support.FPUtil.fp_bits
     libc.src.__support.FPUtil.except_value_utils
     libc.src.__support.FPUtil.multiply_add

@@ -66,6 +66,20 @@ TEST_F(LlvmLibcBfloat16ConversionTest, FromInteger) {
     BFloat16 libc_bfloat{i};
     EXPECT_FP_EQ_ALL_ROUNDING(mpfr_bfloat, libc_bfloat);
   }
+
+  // Narrow integer types and signed min edge cases.
+  EXPECT_FP_EQ(BFloat16(1.0f), BFloat16(true));
+  EXPECT_FP_EQ(BFloat16(0.0f), BFloat16(false));
+  EXPECT_FP_EQ(BFloat16(-128.0f), BFloat16(static_cast<int8_t>(-128)));
+  EXPECT_FP_EQ(BFloat16(255.0f), BFloat16(static_cast<uint8_t>(255)));
+  EXPECT_FP_EQ(BFloat16(-32768.0f), BFloat16(static_cast<int16_t>(-32768)));
+  EXPECT_FP_EQ(BFloat16(65535.0f), BFloat16(static_cast<uint16_t>(65535)));
+
+  // Signaling NaN conversion to float quiets NaN and raises FE_INVALID.
+  LIBC_NAMESPACE::fputil::clear_except(FE_ALL_EXCEPT);
+  float f_snan = static_cast<float>(sNaN);
+  EXPECT_TRUE(LIBC_NAMESPACE::fputil::FPBits<float>(f_snan).is_quiet_nan());
+  EXPECT_FP_EXCEPTION(FE_INVALID);
 }
 
 TEST_F(LlvmLibcBfloat16ConversionTest, compoundAssignmentOperators) {

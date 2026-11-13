@@ -103,6 +103,8 @@ LIBC_ALWAYS_INLINE constexpr bool expects_bool_condition<bool>(bool value) {
 #define LIBC_MATH_IMPL_ID_float_eval 2
 #define LIBC_MATH_IMPL_ID_float_eval_cr_rn 3
 #define LIBC_MATH_IMPL_ID_integer_eval 4
+#define LIBC_MATH_IMPL_ID_fenv_eval 5
+#define LIBC_MATH_IMPL_ID_fp_eval 6
 #define LIBC_MATH_IMPL_CONCAT_INNER(a, b) a##b
 #define LIBC_MATH_IMPL_CONCAT(a, b) LIBC_MATH_IMPL_CONCAT_INNER(a, b)
 #define LIBC_MATH_IMPL_IS(impl, target)                                        \

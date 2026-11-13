@@ -47,10 +47,12 @@ template <typename F, typename I> LIBC_INLINE constexpr F floatint(I x) {
 
   // A mantissa wide enough for I and for F's fraction, rounded up to a whole
   // number of 64-bit words (UInt's width requirement).  With exponent 0 the
-  // dyadic value is exactly `mag`, which as<F>() then rounds to F.
+  // dyadic value is exactly `mag`, which integer_eval::dyadic_as<F>() then
+  // rounds to F in pure-integer RTNE without emitting FP runtime calls.
   constexpr size_t NEED = (sizeof(I) > sizeof(F) ? sizeof(I) : sizeof(F)) * 8;
   constexpr size_t BITS = ((NEED + 63) / 64) * 64;
-  return static_cast<F>(fputil::DyadicFloat<BITS>(sign, 0, mag));
+  return fputil::integer_eval::dyadic_as<F>(
+      fputil::DyadicFloat<BITS>(sign, 0, mag));
 }
 
 } // namespace builtins

@@ -256,6 +256,22 @@ LIBC_INLINE LIBC_CONSTEXPR_DEFAULT void raise_underflow_except_if_required() {
   raise_except_if_required(FE_UNDERFLOW | FE_INEXACT);
 }
 
+LIBC_INLINE LIBC_CONSTEXPR_DEFAULT void raise_inexact_except_if_required() {
+#if !defined(LIBC_MATH_HAS_NO_EXCEPT) &&                                       \
+    !defined(LIBC_MATH_USE_SYSTEM_FENV) &&                                     \
+    !defined(LIBC_FPUTIL_HAS_DUMMY_FENV_IMPL) &&                               \
+    defined(LIBC_TARGET_CPU_HAS_FPU_FLOAT)
+  if (!cpp::is_constant_evaluated()) {
+    if (math_errhandling & MATH_ERREXCEPT) {
+      float v = internal::UNDERFLOW_VAL<float>[0];
+      [[maybe_unused]] volatile float r = 1.0f + v;
+    }
+  }
+#else
+  raise_except_if_required(FE_INEXACT);
+#endif
+}
+
 #if !defined(LIBC_MATH_HAS_NO_EXCEPT) &&                                       \
     !defined(LIBC_MATH_USE_SYSTEM_FENV) &&                                     \
     !defined(LIBC_FPUTIL_HAS_DUMMY_FENV_IMPL)
@@ -309,7 +325,36 @@ raise_underflow_except_if_required<double>() {
 #endif // !LIBC_MATH_HAS_NO_EXCEPT && !LIBC_MATH_USE_SYSTEM_FENV &&
        // !LIBC_FPUTIL_HAS_DUMMY_FENV_IMPL
 
+namespace internal {
+
+#if defined(LIBC_MATH_HAS_NO_EXCEPT) || defined(LIBC_FPUTIL_HAS_DUMMY_FENV_IMPL)
+LIBC_INLINE_VAR constexpr bool HAS_FENV_EXCEPT = false;
+#else
+LIBC_INLINE_VAR constexpr bool HAS_FENV_EXCEPT = true;
+#endif
+
+} // namespace internal
+
 #undef LIBC_FPUTIL_HAS_DUMMY_FENV_IMPL
+
+namespace internal {
+
+template <typename ExceptT>
+LIBC_NOINLINE LIBC_COLD void raise_rare_conversion_except(bool is_invalid,
+                                                          bool is_overflow,
+                                                          bool is_underflow) {
+  if (is_invalid) {
+    raise_except_if_required(FE_INVALID);
+    return;
+  }
+  set_errno_if_required(ERANGE);
+  if (is_overflow)
+    raise_overflow_except_if_required<ExceptT>();
+  else if (is_underflow)
+    raise_underflow_except_if_required<ExceptT>();
+}
+
+} // namespace internal
 
 } // namespace fputil
 } // namespace LIBC_NAMESPACE_DECL

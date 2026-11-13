@@ -129,28 +129,36 @@ TEST(LlvmLibcFEnvImplTest, QuickRoundingTowardZeroTest) {
 
 TEST(LlvmLibcFEnvImplTest, QuickGetRoundTest) {
   using LIBC_NAMESPACE::fputil::quick_get_round;
+  using GenericQuickGetRound =
+      decltype(&LIBC_NAMESPACE::fputil::generic::quick_get_round);
+  GenericQuickGetRound generic_get_round =
+      LIBC_NAMESPACE::fputil::generic::quick_get_round;
   {
     ForceRoundingMode __r(RoundingMode::Upward);
     if (__r.success) {
       ASSERT_EQ(quick_get_round(), FE_UPWARD);
+      ASSERT_EQ(generic_get_round(), FE_UPWARD);
     }
   }
   {
     ForceRoundingMode __r(RoundingMode::Downward);
     if (__r.success) {
       ASSERT_EQ(quick_get_round(), FE_DOWNWARD);
+      ASSERT_EQ(generic_get_round(), FE_DOWNWARD);
     }
   }
   {
     ForceRoundingMode __r(RoundingMode::Nearest);
     if (__r.success) {
       ASSERT_EQ(quick_get_round(), FE_TONEAREST);
+      ASSERT_EQ(generic_get_round(), FE_TONEAREST);
     }
   }
   {
     ForceRoundingMode __r(RoundingMode::TowardZero);
     if (__r.success) {
       ASSERT_EQ(quick_get_round(), FE_TOWARDZERO);
+      ASSERT_EQ(generic_get_round(), FE_TOWARDZERO);
     }
   }
 }

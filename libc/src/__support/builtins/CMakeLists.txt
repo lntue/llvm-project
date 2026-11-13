@@ -26,15 +26,12 @@ add_header_library(
   HDRS
     fpconvert_helper.h
   DEPENDS
-    libc.hdr.fenv_macros
-    libc.src.__support.CPP.algorithm
-    libc.src.__support.CPP.bit
     libc.src.__support.CPP.type_traits
-    libc.src.__support.FPUtil.dyadic_float
-    libc.src.__support.FPUtil.fenv_impl
     libc.src.__support.FPUtil.fp_bits
+    libc.src.__support.FPUtil.fp_convert
     libc.src.__support.macros.attributes
     libc.src.__support.macros.config
+    libc.src.__support.macros.properties.cpu_features
 )
 
 add_header_library(

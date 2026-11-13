@@ -8,11 +8,31 @@ add_fp_unittest(
   SRCS
     dyadic_float_test.cpp
   DEPENDS
+    libc.src.__support.FPUtil.bfloat16
     libc.src.__support.FPUtil.dyadic_float
+    libc.src.__support.FPUtil.float128
+    libc.src.__support.FPUtil.float80
     libc.src.__support.macros.properties.types
-  COMPILE_OPTIONS
-    # Prevent constant folding with a default rounding mode.
-    "-frounding-math"
+)
+
+add_fp_unittest(
+  cast_test
+  SUITE
+    libc-fputil-tests
+  SRCS
+    cast_test.cpp
+  DEPENDS
+    libc.hdr.errno_macros
+    libc.hdr.fenv_macros
+    libc.src.__support.FPUtil.bfloat16
+    libc.src.__support.FPUtil.cast
+    libc.src.__support.FPUtil.fenv_impl
+    libc.src.__support.FPUtil.float128
+    libc.src.__support.FPUtil.float80
+    libc.src.__support.FPUtil.fp_bits
+    libc.src.__support.FPUtil.fp_convert
+    libc.src.__support.FPUtil.rounding_mode
+    libc.src.__support.macros.properties.types
 )
 
 add_libc_test(

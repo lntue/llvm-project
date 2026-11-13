@@ -54,6 +54,9 @@ struct Float128 {
                                                             unsigned_value);
       bits = xd.template as<Float128, /*ShouldSignalExceptions=*/true>().bits;
 
+    } else if constexpr (is_dyadic_float_v<T>) {
+      bits =
+          value.template as<Float128, /*ShouldSignalExceptions=*/true>().bits;
     } else if constexpr (cpp::is_convertible_v<T, Float128>) {
       bits = value.operator Float128().bits;
     } else {

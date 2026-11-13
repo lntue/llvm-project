@@ -6,10 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "src/__support/FPUtil/bfloat16.h"
 #include "src/__support/FPUtil/dyadic_float.h"
+#include "src/__support/FPUtil/float128.h"
+#include "src/__support/FPUtil/float80.h"
 #include "src/__support/big_int.h"
 #include "src/__support/macros/properties/types.h"
 #include "test/UnitTest/FPMatcher.h"
+#include "test/UnitTest/RoundingModeUtils.h"
 #include "test/UnitTest/Test.h"
 #include "utils/MPFRWrapper/MPFRUtils.h"
 
@@ -84,7 +88,7 @@ TEST(LlvmLibcDyadicFloatTest, QuickMul) {
     --x.exponent;                                                              \
     EXPECT_FP_EQ(min_normal / two, static_cast<Type>(x));                      \
                                                                                \
-    DFType y(two *min_normal - min_subnormal);                                 \
+    DFType y(two * min_normal - min_subnormal);                                \
     --y.exponent;                                                              \
     EXPECT_FP_EQ(min_normal, static_cast<Type>(y));                            \
                                                                                \
@@ -103,6 +107,47 @@ TEST(LlvmLibcDyadicFloatTest, QuickMul) {
 TEST_EDGE_RANGES(Float, float);
 TEST_EDGE_RANGES(Double, double);
 TEST_EDGE_RANGES(LongDouble, long double);
+TEST_EDGE_RANGES(Float80, LIBC_NAMESPACE::fputil::Float80);
+TEST_EDGE_RANGES(Float128, LIBC_NAMESPACE::fputil::Float128);
+TEST_EDGE_RANGES(BFloat16, LIBC_NAMESPACE::fputil::BFloat16);
 #ifdef LIBC_TYPES_HAS_FLOAT16
 TEST_EDGE_RANGES(Float16, float16);
 #endif
+
+TEST(LlvmLibcDyadicFloatTest, EvalNamespacesConsistency) {
+  using namespace LIBC_NAMESPACE::fputil::testing;
+  // 1/3 in DyadicFloat<128>: inexact in all binary formats.
+  DFloat128 third(Sign::POS, -129,
+                  LIBC_NAMESPACE::UInt<128>(
+                      {0x5555555555555555ULL, 0xaaaaaaaaaaaaaaaaULL}));
+
+  double d_int = LIBC_NAMESPACE::fputil::integer_eval::dyadic_as<double>(third);
+  ASSERT_FP_EQ(1.0 / 3.0, d_int);
+
+#ifndef LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY
+  constexpr RoundingMode MODES[] = {RoundingMode::Nearest, RoundingMode::Upward,
+                                    RoundingMode::Downward,
+                                    RoundingMode::TowardZero};
+  for (RoundingMode mode : MODES) {
+    ForceRoundingMode r(mode);
+    if (!r.success)
+      continue;
+    int fenv_mode = LIBC_NAMESPACE::fputil::quick_get_round();
+
+    double d_default = static_cast<double>(third);
+    double d_fenv = LIBC_NAMESPACE::fputil::fenv_eval::dyadic_as<double>(third);
+    double d_static =
+        LIBC_NAMESPACE::fputil::static_rounding::dyadic_as<double>(third,
+                                                                   fenv_mode);
+    EXPECT_FP_EQ(d_fenv, d_default);
+    EXPECT_FP_EQ(d_static, d_default);
+
+    // Also test extreme underflow (shift >= Bits) across all rounding modes.
+    DFloat128 tiny(Sign::POS, -2000, DFloat128::MantissaType(1));
+    double tiny_default = static_cast<double>(tiny);
+    double tiny_fenv =
+        LIBC_NAMESPACE::fputil::fenv_eval::dyadic_as<double>(tiny);
+    EXPECT_FP_EQ(tiny_fenv, tiny_default);
+  }
+#endif
+}

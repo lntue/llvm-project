@@ -11,15 +11,19 @@
 
 #include "hdr/errno_macros.h"
 #include "hdr/fenv_macros.h"
+#include "src/__support/CPP/bit.h"
 #include "src/__support/CPP/type_traits.h"
 #include "src/__support/FPUtil/FEnvImpl.h"
 #include "src/__support/FPUtil/FPBits.h"
+#include "src/__support/FPUtil/fp_convert.h"
 #include "src/__support/FPUtil/multiply_add.h"
 #include "src/__support/FPUtil/rounding_mode.h"
 #include "src/__support/big_int.h"
 #include "src/__support/macros/attributes.h"
 #include "src/__support/macros/config.h"
 #include "src/__support/macros/optimization.h" // LIBC_UNLIKELY
+#include "src/__support/macros/properties/architectures.h"
+#include "src/__support/macros/properties/cpu_features.h"
 #include "src/__support/macros/properties/types.h"
 
 #include <stddef.h>
@@ -42,53 +46,28 @@ namespace fputil {
 template <size_t Bits>
 LIBC_INLINE LIBC_CONSTEXPR_DEFAULT int
 rounding_direction(const LIBC_NAMESPACE::UInt<Bits> &value, size_t rshift,
-                   [[maybe_unused]] Sign logical_sign) {
-  // logical_sign only affects FE_DOWNWARD and FE_UPWARD rounding modes. In the
-  // case of LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY being enabled, this option
-  // is no-op
-
-  if (rshift == 0 || (rshift < Bits && (value << (Bits - rshift)) == 0) ||
-      (rshift >= Bits && value == 0))
+                   Sign logical_sign) {
+  if (rshift == 0 || (rshift < Bits && (value << (Bits - rshift)).is_zero()) ||
+      (rshift >= Bits && value.is_zero()))
     return 0; // exact
 
+  bool lsb = (rshift < Bits) ? value.get_bit(rshift) : false;
+  bool round_bit = (rshift <= Bits) ? value.get_bit(rshift - 1) : false;
+  bool sticky_bit =
+      (rshift > Bits)
+          ? true
+          : ((rshift > 1) ? !(value << (Bits - rshift + 1)).is_zero() : false);
+
 #ifdef LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY
-  if (rshift > 0 && rshift <= Bits && value.get_bit(rshift - 1)) {
-    // We round up, unless the value is an exact halfway case and
-    // the bit that will end up in the units place is 0, in which
-    // case tie-break-to-even says round down.
-    bool round_bit = rshift < Bits ? value.get_bit(rshift) : 0;
-    return round_bit != 0 || (value << (Bits - rshift + 1)) != 0 ? +1 : -1;
-  } else {
-    return -1;
-  }
-#else  // !LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY
-  switch (quick_get_round()) {
-  case FE_TONEAREST:
-    if (rshift > 0 && rshift <= Bits && value.get_bit(rshift - 1)) {
-      // We round up, unless the value is an exact halfway case and
-      // the bit that will end up in the units place is 0, in which
-      // case tie-break-to-even says round down.
-      bool round_bit = rshift < Bits ? value.get_bit(rshift) : 0;
-      return round_bit != 0 || (value << (Bits - rshift + 1)) != 0 ? +1 : -1;
-    } else {
-      return -1;
-    }
-  case FE_TOWARDZERO:
-    return -1;
-  case FE_DOWNWARD:
-    return logical_sign.is_neg() &&
-                   (rshift < Bits && (value << (Bits - rshift)) != 0)
-               ? +1
-               : -1;
-  case FE_UPWARD:
-    return logical_sign.is_pos() &&
-                   (rshift < Bits && (value << (Bits - rshift)) != 0)
-               ? +1
-               : -1;
-  default:
-    __builtin_unreachable();
-  }
-#endif // LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY
+  int rounding = FE_TONEAREST;
+#else
+  int rounding =
+      cpp::is_constant_evaluated() ? FE_TONEAREST : quick_get_round();
+#endif
+  return internal::should_round_up(logical_sign, lsb, round_bit, sticky_bit,
+                                   rounding)
+             ? +1
+             : -1;
 }
 
 // A generic class to perform computations of high precision floating points.
@@ -114,11 +93,42 @@ template <size_t Bits> struct DyadicFloat {
   template <typename T, cpp::enable_if_t<cpp::is_floating_point_v<T>, int> = 0>
   LIBC_INLINE LIBC_BIT_CAST_CONSTEXPR DyadicFloat(T x) {
     static_assert(FPBits<T>::FRACTION_LEN < Bits);
+    using StorageType = typename FPBits<T>::StorageType;
+    using WordType = typename MantissaType::word_type;
+
     FPBits<T> x_bits(x);
     sign = x_bits.sign();
-    exponent = x_bits.get_explicit_exponent() - FPBits<T>::FRACTION_LEN;
-    mantissa = MantissaType(x_bits.get_explicit_mantissa());
-    normalize();
+
+    if constexpr (!is_big_int_v<StorageType> &&
+                  sizeof(StorageType) <= sizeof(WordType)) {
+      // Normalize in narrow StorageType/WordType first and write directly into
+      // the top word of MantissaType, avoiding multi-word clz and shifts.
+      constexpr size_t WORD_BITS = MantissaType::WORD_SIZE;
+      uint32_t biased_exp = x_bits.get_biased_exponent();
+      if (LIBC_LIKELY(biased_exp != 0)) {
+        exponent = static_cast<int>(biased_exp) - FPBits<T>::EXP_BIAS -
+                   static_cast<int>(Bits - 1);
+        mantissa.val[MantissaType::WORD_COUNT - 1] = static_cast<WordType>(
+            static_cast<WordType>(x_bits.get_explicit_mantissa())
+            << (WORD_BITS - 1 - FPBits<T>::FRACTION_LEN));
+      } else {
+        StorageType raw_sig = x_bits.get_mantissa();
+        if (raw_sig != 0) {
+          int lz = cpp::countl_zero(raw_sig);
+          constexpr int STORAGE_BITS = FPBits<T>::STORAGE_LEN;
+          int sub_shift = lz - (STORAGE_BITS - 1 - FPBits<T>::FRACTION_LEN);
+          exponent =
+              1 - FPBits<T>::EXP_BIAS - sub_shift - static_cast<int>(Bits - 1);
+          mantissa.val[MantissaType::WORD_COUNT - 1] = static_cast<WordType>(
+              static_cast<WordType>(raw_sig)
+              << (static_cast<int>(WORD_BITS) - STORAGE_BITS + lz));
+        }
+      }
+    } else {
+      exponent = x_bits.get_explicit_exponent() - FPBits<T>::FRACTION_LEN;
+      mantissa = MantissaType(x_bits.get_explicit_mantissa());
+      normalize();
+    }
   }
 
   LIBC_INLINE constexpr DyadicFloat(Sign s, int e, const MantissaType &m)
@@ -159,7 +169,7 @@ template <size_t Bits> struct DyadicFloat {
 
   // Assume that it is already normalized.  Output the unbiased exponent.
   LIBC_INLINE constexpr int get_unbiased_exponent() const {
-    return exponent + (Bits - 1);
+    return exponent + static_cast<int>(Bits - 1);
   }
 
   // Produce a correctly rounded DyadicFloat from a too-large mantissa,
@@ -183,319 +193,34 @@ template <size_t Bits> struct DyadicFloat {
     return DyadicFloat(result_sign, result_exponent, result_mantissa);
   }
 
-  // The integer core of generic_as().  The destination is named by FPType, so
-  // it also covers formats with no usable native type (float16 without
-  // _Float16).
-  template <FPType DstType, bool ShouldSignalExceptions>
+  template <FPType DstType, bool ShouldSignalExceptions = true>
   LIBC_INLINE LIBC_CONSTEXPR_DEFAULT typename FPRep<DstType>::StorageType
-  generic_as_bits() const {
-    using DstRep = FPRep<DstType>;
-    using StorageType = typename DstRep::StorageType;
-    // Native type used to pick the exception-raising specialization; formats
-    // without one fall back to the generic version.
-    using ExceptT = cpp::conditional_t<
-        DstType == FPType::IEEE754_Binary32, float,
-        cpp::conditional_t<DstType == FPType::IEEE754_Binary64, double, void>>;
-    static_assert(DstRep::FRACTION_LEN < Bits);
-
-    constexpr int EXTRA_FRACTION_LEN = Bits - 1 - DstRep::FRACTION_LEN;
-
-    if (mantissa == 0)
-      return DstRep::zero(sign).uintval();
-
-    int unbiased_exp = get_unbiased_exponent();
-
-    if (unbiased_exp + DstRep::EXP_BIAS >= DstRep::MAX_BIASED_EXPONENT) {
-      if (!cpp::is_constant_evaluated()) {
-#if !(defined(LIBC_MATH_HAS_NO_EXCEPT) &&                                      \
-      defined(LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY))
-        if constexpr (ShouldSignalExceptions && internal::HAS_HW_FPU<ExceptT>) {
-          set_errno_if_required(ERANGE);
-          ExceptT r = internal::OVERFLOW_FACTOR<ExceptT> *
-                      internal::OVERFLOW_VAL<ExceptT>[sign.is_neg()];
-          return FPBits<ExceptT>(r).uintval();
-        }
-#endif
-      }
-      if constexpr (ShouldSignalExceptions) {
-        set_errno_if_required(ERANGE);
-        raise_overflow_except_if_required<ExceptT>();
-      }
-
-#ifdef LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY
-      return DstRep::inf(sign).uintval();
-#else  // !LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY
-      switch (quick_get_round()) {
-      case FE_TONEAREST:
-        return DstRep::inf(sign).uintval();
-      case FE_TOWARDZERO:
-        return DstRep::max_normal(sign).uintval();
-      case FE_DOWNWARD:
-        if (sign.is_pos())
-          return DstRep::max_normal(Sign::POS).uintval();
-        return DstRep::inf(Sign::NEG).uintval();
-      case FE_UPWARD:
-        if (sign.is_neg())
-          return DstRep::max_normal(Sign::NEG).uintval();
-        return DstRep::inf(Sign::POS).uintval();
-      default:
-        __builtin_unreachable();
-      }
-#endif // LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY
-    }
-
-    StorageType out_biased_exp = 0;
-    StorageType out_mantissa = 0;
-    bool round = false;
-    bool sticky = false;
-    bool underflow = false;
-
-    if (unbiased_exp < -DstRep::EXP_BIAS - DstRep::FRACTION_LEN) {
-      sticky = true;
-      underflow = true;
-    } else if (unbiased_exp == -DstRep::EXP_BIAS - DstRep::FRACTION_LEN) {
-      round = true;
-      // underflow is detected pre-rounding FE_UNDERFLOW may be raised
-      // even if rounding produces a non-underflow result
-      underflow = true;
-      MantissaType sticky_mask = (MantissaType(1) << (Bits - 1)) - 1;
-      sticky = (mantissa & sticky_mask) != 0;
-    } else {
-      int extra_fraction_len = EXTRA_FRACTION_LEN;
-
-      if (unbiased_exp < 1 - DstRep::EXP_BIAS) {
-        underflow = true;
-        extra_fraction_len += 1 - DstRep::EXP_BIAS - unbiased_exp;
-      } else {
-        out_biased_exp =
-            static_cast<StorageType>(unbiased_exp + DstRep::EXP_BIAS);
-      }
-
-      if (extra_fraction_len > 0) {
-        MantissaType round_mask = MantissaType(1) << (extra_fraction_len - 1);
-        round = (mantissa & round_mask) != 0;
-        MantissaType sticky_mask = round_mask - 1;
-        sticky = (mantissa & sticky_mask) != 0;
-      }
-
-      out_mantissa = static_cast<StorageType>(mantissa >> extra_fraction_len);
-    }
-
-    bool lsb = (out_mantissa & 1) != 0;
-
-    StorageType result =
-        DstRep::create_value(sign, out_biased_exp, out_mantissa).uintval();
-
-#ifdef LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY
-    if (round && (lsb || sticky))
-      ++result;
-#else
-    switch (quick_get_round()) {
-    case FE_TONEAREST:
-      if (round && (lsb || sticky))
-        ++result;
-      break;
-    case FE_DOWNWARD:
-      if (sign.is_neg() && (round || sticky))
-        ++result;
-      break;
-    case FE_UPWARD:
-      if (sign.is_pos() && (round || sticky))
-        ++result;
-      break;
-    default:
-      break;
-    }
-#endif // LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY
-
-    if (ShouldSignalExceptions && (round || sticky)) {
-      if (DstRep(result).is_inf()) {
-        set_errno_if_required(ERANGE);
-        raise_overflow_except_if_required<ExceptT>();
-      } else if (underflow) {
-        set_errno_if_required(ERANGE);
-        raise_underflow_except_if_required<ExceptT>();
-      } else {
-        raise_except_if_required(FE_INEXACT);
-      }
-    }
-
-    return result;
-  }
-
-  template <typename T, bool ShouldSignalExceptions>
-  LIBC_INLINE LIBC_CONSTEXPR_DEFAULT cpp::enable_if_t<
-      cpp::is_floating_point_v<T> && (FPBits<T>::FRACTION_LEN < Bits), T>
-  generic_as() const {
-    return FPBits<T>(
-               generic_as_bits<get_fp_type<T>(), ShouldSignalExceptions>())
-        .get_val();
-  }
+  generic_as_bits() const;
 
   template <typename T, bool ShouldSignalExceptions = true,
-            typename = cpp::enable_if_t<cpp::is_floating_point_v<T> &&
-                                            (FPBits<T>::FRACTION_LEN < Bits),
-                                        void>>
-  LIBC_INLINE LIBC_CONSTEXPR_DEFAULT T fast_as() const {
-    if (LIBC_UNLIKELY(mantissa.is_zero()))
-      return FPBits<T>::zero(sign).get_val();
+            cpp::enable_if_t<cpp::is_floating_point_v<T> &&
+                                 (FPBits<T>::FRACTION_LEN < Bits),
+                             int> = 0>
+  LIBC_INLINE LIBC_CONSTEXPR_DEFAULT T generic_as() const;
 
-    // Assume that it is normalized, and output is also normal.
-    constexpr uint32_t PRECISION = FPBits<T>::FRACTION_LEN + 1;
-    using output_bits_t = typename FPBits<T>::StorageType;
-    constexpr output_bits_t IMPLICIT_MASK =
-        FPBits<T>::SIG_MASK - FPBits<T>::FRACTION_MASK;
-
-    int exp_hi = exponent + static_cast<int>((Bits - 1) + FPBits<T>::EXP_BIAS);
-
-    if (LIBC_UNLIKELY(exp_hi > 2 * FPBits<T>::EXP_BIAS)) {
-      // Results overflow.
-      if (cpp::is_constant_evaluated())
-        return FPBits<T>::inf(sign).get_val();
-
-      if constexpr (ShouldSignalExceptions)
-        set_errno_if_required(ERANGE);
-
-#if defined(LIBC_MATH_HAS_NO_EXCEPT) &&                                        \
-    defined(LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY)
-      return FPBits<T>::inf(sign).get_val();
-#else
-      if constexpr (ShouldSignalExceptions && internal::HAS_HW_FPU<T>) {
-        return internal::OVERFLOW_FACTOR<T> *
-               internal::OVERFLOW_VAL<T>[sign.is_neg()];
-      } else {
-        if constexpr (ShouldSignalExceptions)
-          raise_overflow_except_if_required<T>();
-#ifndef LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY
-        int rounding = quick_get_round();
-        if (rounding == FE_TOWARDZERO ||
-            (rounding == FE_DOWNWARD && sign.is_pos()) ||
-            (rounding == FE_UPWARD && sign.is_neg()))
-          return FPBits<T>::max_normal(sign).get_val();
-#endif // !LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY
-        return FPBits<T>::inf(sign).get_val();
-      }
-#endif
-    }
-
-    bool denorm = false;
-    uint32_t shift = Bits - PRECISION;
-    if (LIBC_UNLIKELY(exp_hi <= 0)) {
-      // Output is denormal.
-      denorm = true;
-      shift = (Bits - PRECISION) + static_cast<uint32_t>(1 - exp_hi);
-
-      exp_hi = FPBits<T>::EXP_BIAS;
-    }
-
-    int exp_lo = exp_hi - static_cast<int>(PRECISION) - 1;
-
-    MantissaType m_hi =
-        shift >= MantissaType::BITS ? MantissaType(0) : mantissa >> shift;
-
-    T d_hi = FPBits<T>::create_value(
-                 sign, static_cast<output_bits_t>(exp_hi),
-                 (static_cast<output_bits_t>(m_hi) & FPBits<T>::SIG_MASK) |
-                     IMPLICIT_MASK)
-                 .get_val();
-
-    MantissaType round_mask =
-        shift - 1 >= MantissaType::BITS ? 0 : MantissaType(1) << (shift - 1);
-    MantissaType sticky_mask = round_mask - MantissaType(1);
-
-    bool round_bit = !(mantissa & round_mask).is_zero();
-    bool sticky_bit = !(mantissa & sticky_mask).is_zero();
-    int round_and_sticky = int(round_bit) * 2 + int(sticky_bit);
-
-    T d_lo;
-
-    if (LIBC_UNLIKELY(exp_lo <= 0)) {
-      // d_lo is denormal, but the output is normal.
-      int scale_up_exponent = 1 - exp_lo;
-      T scale_up_factor =
-          FPBits<T>::create_value(Sign::POS,
-                                  static_cast<output_bits_t>(
-                                      FPBits<T>::EXP_BIAS + scale_up_exponent),
-                                  IMPLICIT_MASK)
-              .get_val();
-      T scale_down_factor =
-          FPBits<T>::create_value(Sign::POS,
-                                  static_cast<output_bits_t>(
-                                      FPBits<T>::EXP_BIAS - scale_up_exponent),
-                                  IMPLICIT_MASK)
-              .get_val();
-
-      d_lo = FPBits<T>::create_value(
-                 sign, static_cast<output_bits_t>(exp_lo + scale_up_exponent),
-                 IMPLICIT_MASK)
-                 .get_val();
-
-      return multiply_add(d_lo, T(round_and_sticky), d_hi * scale_up_factor) *
-             scale_down_factor;
-    }
-
-    d_lo = FPBits<T>::create_value(sign, static_cast<output_bits_t>(exp_lo),
-                                   IMPLICIT_MASK)
-               .get_val();
-
-    // Still correct without FMA instructions if `d_lo` is not underflow.
-    T r = multiply_add(d_lo, T(round_and_sticky), d_hi);
-
-    if (LIBC_UNLIKELY(denorm)) {
-      // Exponent before rounding is in denormal range, simply clear the
-      // exponent field.
-      output_bits_t clear_exp = static_cast<output_bits_t>(
-          output_bits_t(exp_hi) << FPBits<T>::SIG_LEN);
-      output_bits_t r_bits = FPBits<T>(r).uintval() - clear_exp;
-
-      if (!(r_bits & FPBits<T>::EXP_MASK)) {
-        // Output is denormal after rounding, clear the implicit bit for
-        // 80-bit long double.
-        r_bits -= IMPLICIT_MASK;
-      }
-
-      // Underflow exception and ERANGE are signaled when an unrounded result
-      // in the denormal range is inexact, even if destination rounding rounds
-      // it up to min_normal.
-      if (ShouldSignalExceptions && round_and_sticky) {
-        set_errno_if_required(ERANGE);
-        raise_underflow_except_if_required<T>();
-      }
-
-      return FPBits<T>(r_bits).get_val();
-    }
-
-    return r;
-  }
+  template <typename T, bool ShouldSignalExceptions = true,
+            cpp::enable_if_t<cpp::is_floating_point_v<T> &&
+                                 (FPBits<T>::FRACTION_LEN < Bits),
+                             int> = 0>
+  LIBC_INLINE LIBC_CONSTEXPR_DEFAULT T fast_as() const;
 
   // Assume that it is already normalized.
   // Output is rounded correctly with respect to the current rounding mode.
   template <typename T, bool ShouldSignalExceptions = true,
-            typename = cpp::enable_if_t<cpp::is_floating_point_v<T> &&
-                                            (FPBits<T>::FRACTION_LEN < Bits),
-                                        void>>
-  LIBC_INLINE LIBC_CONSTEXPR_DEFAULT T as() const {
-    if constexpr (cpp::is_same_v<T, bfloat16> || cpp::is_same_v<T, Float128> ||
-                  cpp::is_same_v<T, Float80>
-#if defined(LIBC_TYPES_HAS_FLOAT16) && !defined(__LIBC_USE_FLOAT16_CONVERSION)
-                  || cpp::is_same_v<T, float16>
-#endif
-#if defined(LIBC_TYPES_HAS_NATIVE_FLOAT128)
-                  || cpp::is_same_v<T, float128>
-#endif
-    )
-      return generic_as<T, ShouldSignalExceptions>();
-    else
-      return fast_as<T, ShouldSignalExceptions>();
-  }
+            cpp::enable_if_t<cpp::is_floating_point_v<T> &&
+                                 (FPBits<T>::FRACTION_LEN < Bits),
+                             int> = 0>
+  LIBC_INLINE LIBC_CONSTEXPR_DEFAULT T as() const;
 
-  template <typename T,
-            typename = cpp::enable_if_t<cpp::is_floating_point_v<T> &&
-                                            (FPBits<T>::FRACTION_LEN < Bits),
-                                        void>>
-  LIBC_INLINE explicit constexpr operator T() const {
-    return as<T, /*ShouldSignalExceptions=*/true>();
-  }
+  template <typename T, cpp::enable_if_t<cpp::is_floating_point_v<T> &&
+                                             (FPBits<T>::FRACTION_LEN < Bits),
+                                         int> = 0>
+  LIBC_INLINE explicit constexpr operator T() const;
 
   LIBC_INLINE constexpr MantissaType as_mantissa_type() const {
     if (mantissa.is_zero())
@@ -517,9 +242,8 @@ template <size_t Bits> struct DyadicFloat {
         new_mant >>= shift;
     }
 
-    if (sign.is_neg()) {
+    if (sign.is_neg())
       new_mant = (~new_mant) + 1;
-    }
 
     return new_mant;
   }
@@ -527,7 +251,7 @@ template <size_t Bits> struct DyadicFloat {
   LIBC_INLINE LIBC_CONSTEXPR_DEFAULT MantissaType
   as_mantissa_type_rounded(int *round_dir_out = nullptr) const {
     int round_dir = 0;
-    MantissaType new_mant;
+    MantissaType new_mant(0);
     if (mantissa.is_zero()) {
       new_mant = 0;
     } else {
@@ -535,10 +259,6 @@ template <size_t Bits> struct DyadicFloat {
       if (exponent > 0) {
         new_mant <<= exponent;
       } else if (exponent < 0) {
-        // Cast the exponent to size_t before negating it, rather than after,
-        // to avoid undefined behavior negating INT_MIN as an integer
-        // (although exponents coming in to this function _shouldn't_ be that
-        // large). The result should always end up as a positive size_t.
         size_t shift = -static_cast<size_t>(exponent);
         if (shift >= Bits)
           new_mant = 0;
@@ -549,9 +269,8 @@ template <size_t Bits> struct DyadicFloat {
           ++new_mant;
       }
 
-      if (sign.is_neg()) {
+      if (sign.is_neg())
         new_mant = (~new_mant) + 1;
-      }
     }
 
     if (round_dir_out)
@@ -564,6 +283,441 @@ template <size_t Bits> struct DyadicFloat {
     return DyadicFloat(sign.negate(), exponent, mantissa);
   }
 };
+
+template <typename T> struct is_dyadic_float : cpp::false_type {};
+template <size_t Bits>
+struct is_dyadic_float<DyadicFloat<Bits>> : cpp::true_type {};
+template <typename T>
+LIBC_INLINE_VAR constexpr bool is_dyadic_float_v =
+    is_dyadic_float<cpp::remove_cv_t<T>>::value;
+
+namespace internal {
+
+template <FPType DstType, bool StaticNearest, uint8_t FlagsMask, size_t Bits>
+LIBC_INLINE constexpr typename FPRep<DstType>::StorageType
+dyadic_as_bits_impl(const DyadicFloat<Bits> &xd, [[maybe_unused]] int rounding,
+                    [[maybe_unused]] uint8_t *out_flags) {
+  using DstRep = FPRep<DstType>;
+  using StorageType = typename DstRep::StorageType;
+  using MantissaType = typename DyadicFloat<Bits>::MantissaType;
+  static_assert(DstRep::FRACTION_LEN < Bits);
+
+  if constexpr (FlagsMask != 0)
+    *out_flags = FP_EXCEPT_NONE;
+
+  auto set_flags = [&](uint8_t f) constexpr {
+    if constexpr (FlagsMask != 0)
+      *out_flags = static_cast<uint8_t>(f & FlagsMask);
+  };
+
+  auto round_up = [&](bool lsb, bool round_bit,
+                      bool sticky_bit) constexpr -> bool {
+    if constexpr (StaticNearest)
+      return round_bit && (lsb || sticky_bit);
+    else
+      return should_round_up(xd.sign, lsb, round_bit, sticky_bit, rounding);
+  };
+
+  if (LIBC_UNLIKELY(xd.mantissa.is_zero()))
+    return DstRep::zero(xd.sign).uintval();
+
+  int unbiased_exp = xd.get_unbiased_exponent();
+  int dst_biased_exp = unbiased_exp + DstRep::EXP_BIAS;
+
+  if (LIBC_UNLIKELY(dst_biased_exp >= DstRep::MAX_BIASED_EXPONENT)) {
+    set_flags(FP_EXCEPT_OVERFLOW | FP_EXCEPT_INEXACT);
+    bool to_inf =
+        StaticNearest ? true : overflow_rounds_to_inf(xd.sign, rounding);
+    return to_inf ? DstRep::inf(xd.sign).uintval()
+                  : DstRep::max_normal(xd.sign).uintval();
+  }
+
+  constexpr int EXTRA_FRACTION_LEN =
+      static_cast<int>(Bits - 1) - DstRep::FRACTION_LEN;
+
+  // Normal destination path: shift and masks are compile-time constants,
+  // avoiding runtime multi-word shifts on 32-bit targets.
+  if (LIBC_LIKELY(dst_biased_exp >= 1)) {
+    StorageType out_biased_exp = static_cast<StorageType>(dst_biased_exp);
+    StorageType out_mantissa = static_cast<StorageType>(
+        xd.mantissa >> static_cast<size_t>(EXTRA_FRACTION_LEN));
+    bool round_bit = false;
+    bool sticky_bit = false;
+    if constexpr (EXTRA_FRACTION_LEN > 0) {
+      constexpr MantissaType ROUND_MASK =
+          MantissaType(1) << static_cast<size_t>(EXTRA_FRACTION_LEN - 1);
+      constexpr MantissaType STICKY_MASK = ROUND_MASK - MantissaType(1);
+      round_bit = !(xd.mantissa & ROUND_MASK).is_zero();
+      sticky_bit = !(xd.mantissa & STICKY_MASK).is_zero();
+    }
+
+    bool lsb = (out_mantissa & StorageType(1)) != 0;
+    StorageType result =
+        DstRep::create_value(xd.sign, out_biased_exp, out_mantissa).uintval();
+    if (round_up(lsb, round_bit, sticky_bit))
+      result = apply_rounding_increment<DstType>(result);
+
+    if constexpr (FlagsMask != 0) {
+      if (round_bit || sticky_bit) {
+        set_flags(LIBC_UNLIKELY(DstRep(result).is_inf())
+                      ? (FP_EXCEPT_OVERFLOW | FP_EXCEPT_INEXACT)
+                      : FP_EXCEPT_INEXACT);
+      }
+    }
+    return result;
+  }
+
+  // Subnormal or extreme-underflow path (dst_biased_exp <= 0).
+  StorageType out_mantissa = 0;
+  bool round_bit = false;
+  bool sticky_bit = false;
+
+  if (unbiased_exp < -DstRep::EXP_BIAS - DstRep::FRACTION_LEN) {
+    sticky_bit = true;
+  } else if (unbiased_exp == -DstRep::EXP_BIAS - DstRep::FRACTION_LEN) {
+    round_bit = true;
+    constexpr MantissaType STICKY_MASK =
+        (MantissaType(1) << (Bits - 1)) - MantissaType(1);
+    sticky_bit = !(xd.mantissa & STICKY_MASK).is_zero();
+  } else {
+    size_t rshift =
+        static_cast<size_t>(EXTRA_FRACTION_LEN + 1 - dst_biased_exp);
+    constexpr size_t WORD_BITS = MantissaType::WORD_SIZE;
+    using WordType = typename MantissaType::word_type;
+    if constexpr (!is_big_int_v<StorageType> &&
+                  sizeof(StorageType) <= sizeof(WordType)) {
+      constexpr size_t TOP = MantissaType::WORD_COUNT - 1;
+      WordType top_word = xd.mantissa[TOP];
+      size_t top_rshift = rshift - TOP * WORD_BITS;
+      out_mantissa = static_cast<StorageType>(top_word >> top_rshift);
+      round_bit = ((top_word >> (top_rshift - 1)) & WordType(1)) != 0;
+      WordType low_mask = static_cast<WordType>(
+          static_cast<WordType>(WordType(1) << (top_rshift - 1)) - WordType(1));
+      sticky_bit = (top_word & low_mask) != 0;
+      for (size_t i = 0; i < TOP; ++i)
+        sticky_bit = sticky_bit || (xd.mantissa[i] != 0);
+    } else {
+      size_t rb_idx = rshift - 1;
+      size_t rb_word = rb_idx / WORD_BITS;
+      size_t rb_off = rb_idx % WORD_BITS;
+      round_bit = ((xd.mantissa[rb_word] >> rb_off) & WordType(1)) != 0;
+      for (size_t i = 0; i < rb_word; ++i)
+        sticky_bit = sticky_bit || (xd.mantissa[i] != 0);
+      if (rb_off > 0) {
+        WordType low_mask = static_cast<WordType>(
+            static_cast<WordType>(WordType(1) << rb_off) - WordType(1));
+        sticky_bit = sticky_bit || ((xd.mantissa[rb_word] & low_mask) != 0);
+      }
+      out_mantissa = static_cast<StorageType>(xd.mantissa >> rshift);
+    }
+  }
+
+  bool lsb = (out_mantissa & StorageType(1)) != 0;
+  StorageType result =
+      DstRep::create_value(xd.sign, StorageType(0), out_mantissa).uintval();
+  if (round_up(lsb, round_bit, sticky_bit))
+    result = apply_rounding_increment<DstType>(result);
+
+  // Underflow is detected pre-rounding; FE_UNDERFLOW may be raised even if
+  // rounding produces min_normal.
+  if (round_bit || sticky_bit)
+    set_flags(FP_EXCEPT_UNDERFLOW | FP_EXCEPT_INEXACT);
+  return result;
+}
+
+} // namespace internal
+
+namespace static_rounding {
+
+// Pure-integer conversion from a normalized DyadicFloat<Bits> to DstType bits
+// under an explicit rounding mode, returning {bits, except_flags} with no FEnv
+// or errno side effects and no native floating-point operations.
+template <FPType DstType, size_t Bits>
+LIBC_INLINE constexpr internal::ConversionResult<
+    typename FPRep<DstType>::StorageType>
+dyadic_as_bits(const DyadicFloat<Bits> &xd, int rounding = FE_TONEAREST) {
+  uint8_t flags = internal::FP_EXCEPT_NONE;
+  auto bits =
+      internal::dyadic_as_bits_impl<DstType, /*StaticNearest=*/false, 0xffU>(
+          xd, rounding, &flags);
+  return {bits, flags};
+}
+
+template <typename T, size_t Bits>
+LIBC_INLINE constexpr cpp::enable_if_t<
+    cpp::is_floating_point_v<T> && (FPBits<T>::FRACTION_LEN < Bits), T>
+dyadic_as(const DyadicFloat<Bits> &xd, int rounding = FE_TONEAREST) {
+  return FPBits<T>(dyadic_as_bits<get_fp_type<T>()>(xd, rounding).bits)
+      .get_val();
+}
+
+} // namespace static_rounding
+
+namespace integer_eval {
+
+template <FPType DstType, size_t Bits>
+LIBC_INLINE constexpr typename FPRep<DstType>::StorageType
+dyadic_as_bits(const DyadicFloat<Bits> &xd) {
+  return fputil::internal::dyadic_as_bits_impl<DstType, /*StaticNearest=*/true,
+                                               0>(xd, FE_TONEAREST, nullptr);
+}
+
+template <typename T, size_t Bits>
+LIBC_INLINE constexpr cpp::enable_if_t<
+    cpp::is_floating_point_v<T> && (FPBits<T>::FRACTION_LEN < Bits), T>
+dyadic_as(const DyadicFloat<Bits> &xd) {
+  return FPBits<T>(dyadic_as_bits<get_fp_type<T>()>(xd)).get_val();
+}
+
+} // namespace integer_eval
+
+namespace fenv_eval {
+
+template <FPType DstType, bool ShouldSignalExceptions = true, size_t Bits>
+LIBC_INLINE LIBC_CONSTEXPR_DEFAULT typename FPRep<DstType>::StorageType
+dyadic_as_bits(const DyadicFloat<Bits> &xd) {
+  constexpr bool STATIC_NEAREST = !fputil::internal::HAS_DYNAMIC_ROUNDING;
+#ifdef LIBC_MATH_HAS_NO_ERRNO
+  constexpr uint8_t ERRNO_MASK = fputil::internal::FP_EXCEPT_NONE;
+#else
+  constexpr uint8_t ERRNO_MASK = fputil::internal::FP_EXCEPT_OVERFLOW |
+                                 fputil::internal::FP_EXCEPT_UNDERFLOW;
+#endif
+  constexpr uint8_t FLAGS_MASK =
+      ShouldSignalExceptions
+          ? static_cast<uint8_t>((fputil::internal::HAS_FENV_EXCEPT
+                                      ? uint8_t(0xffU)
+                                      : uint8_t(0)) |
+                                 ERRNO_MASK)
+          : fputil::internal::FP_EXCEPT_NONE;
+
+  if constexpr (STATIC_NEAREST && FLAGS_MASK == 0) {
+    return integer_eval::dyadic_as_bits<DstType>(xd);
+  } else {
+    int rounding = FE_TONEAREST;
+    if constexpr (!STATIC_NEAREST) {
+      if (!cpp::is_constant_evaluated())
+        rounding = quick_get_round();
+    }
+    uint8_t except_flags = fputil::internal::FP_EXCEPT_NONE;
+    auto bits = fputil::internal::dyadic_as_bits_impl<DstType, STATIC_NEAREST,
+                                                      FLAGS_MASK>(
+        xd, rounding, &except_flags);
+
+    if constexpr (FLAGS_MASK != 0) {
+      if (except_flags != fputil::internal::FP_EXCEPT_NONE &&
+          !cpp::is_constant_evaluated()) {
+        using ExceptT = cpp::conditional_t<
+            DstType == FPType::IEEE754_Binary64 &&
+                fputil::internal::HAS_HW_FPU<double>,
+            double,
+            cpp::conditional_t<fputil::internal::HAS_HW_FPU<float>, float,
+                               void>>;
+        constexpr uint8_t RARE_MASK = fputil::internal::FP_EXCEPT_INVALID |
+                                      fputil::internal::FP_EXCEPT_OVERFLOW |
+                                      fputil::internal::FP_EXCEPT_UNDERFLOW;
+        if (LIBC_UNLIKELY((except_flags & RARE_MASK) != 0)) {
+          fputil::internal::raise_rare_conversion_except<ExceptT>(
+              false, (except_flags & fputil::internal::FP_EXCEPT_OVERFLOW) != 0,
+              (except_flags & fputil::internal::FP_EXCEPT_UNDERFLOW) != 0);
+        } else if constexpr (fputil::internal::HAS_FENV_EXCEPT) {
+          if ((except_flags & fputil::internal::FP_EXCEPT_INEXACT) != 0)
+            raise_inexact_except_if_required();
+        }
+      }
+    }
+
+    return bits;
+  }
+}
+
+template <typename T, bool ShouldSignalExceptions = true, size_t Bits>
+LIBC_INLINE LIBC_CONSTEXPR_DEFAULT cpp::enable_if_t<
+    cpp::is_floating_point_v<T> && (FPBits<T>::FRACTION_LEN < Bits), T>
+dyadic_as(const DyadicFloat<Bits> &xd) {
+  return FPBits<T>(dyadic_as_bits<get_fp_type<T>(), ShouldSignalExceptions>(xd))
+      .get_val();
+}
+
+namespace internal {
+
+template <typename T, bool ShouldSignalExceptions, size_t Bits>
+LIBC_NOINLINE LIBC_COLD T dyadic_as_cold(const DyadicFloat<Bits> &xd) {
+  return dyadic_as<T, ShouldSignalExceptions>(xd);
+}
+
+} // namespace internal
+} // namespace fenv_eval
+
+namespace fp_eval {
+
+namespace internal {
+
+#if !defined(LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY) &&                       \
+    !defined(LIBC_TARGET_ARCH_IS_GPU)
+template <typename T>
+LIBC_INLINE_VAR const volatile T DYADIC_RS_TABLE[4] = {T(0), T(1), T(2), T(3)};
+#endif
+
+template <typename T>
+LIBC_INLINE_VAR constexpr bool IS_NATIVE_HW_DYADIC_TYPE =
+    (cpp::is_same_v<T, float> || cpp::is_same_v<T, double>) &&
+    fputil::internal::HAS_HW_FPU<T>;
+
+} // namespace internal
+
+// Fast hardware FMA/add path for float and double when HAS_HW_FPU<T> is true.
+// Inlines only the normal, non-overflowing, normal-d_lo exponent range via a
+// single unsigned range check, delegating all edge cases (subnormals,
+// exp_lo <= 0, top-binade carry, and overflow) to outlined fenv_eval.
+template <typename T, bool ShouldSignalExceptions = true, size_t Bits>
+LIBC_INLINE LIBC_CONSTEXPR_DEFAULT cpp::enable_if_t<
+    internal::IS_NATIVE_HW_DYADIC_TYPE<T> && (FPBits<T>::FRACTION_LEN < Bits),
+    T>
+dyadic_as(const DyadicFloat<Bits> &xd) {
+  if constexpr (!ShouldSignalExceptions) {
+    return fenv_eval::dyadic_as<T, /*ShouldSignalExceptions=*/false>(xd);
+  } else {
+    if (LIBC_UNLIKELY(xd.mantissa.is_zero()))
+      return FPBits<T>::zero(xd.sign).get_val();
+
+    constexpr uint32_t PRECISION = FPBits<T>::FRACTION_LEN + 1;
+    using OutputBitsT = typename FPBits<T>::StorageType;
+    constexpr OutputBitsT IMPLICIT_MASK =
+        FPBits<T>::SIG_MASK - FPBits<T>::FRACTION_MASK;
+
+    int exp_hi =
+        xd.exponent + static_cast<int>((Bits - 1) + FPBits<T>::EXP_BIAS);
+
+    // Hot path: exp_lo = exp_hi - PRECISION - 1 >= 1 AND exp_hi < 2 * EXP_BIAS
+    // (excluding the top binade exp_hi == 2 * EXP_BIAS so rounding carry into
+    // infinity always sets ERANGE via the cold path).
+    constexpr int MIN_HOT_EXP = static_cast<int>(PRECISION) + 2;
+    constexpr int MAX_HOT_EXP = 2 * FPBits<T>::EXP_BIAS - 1;
+    if (LIBC_UNLIKELY(static_cast<uint32_t>(exp_hi - MIN_HOT_EXP) >
+                      static_cast<uint32_t>(MAX_HOT_EXP - MIN_HOT_EXP))) {
+      if (cpp::is_constant_evaluated())
+        return fenv_eval::dyadic_as<T, ShouldSignalExceptions>(xd);
+      return fenv_eval::internal::dyadic_as_cold<T, ShouldSignalExceptions>(xd);
+    }
+
+    constexpr uint32_t SHIFT = Bits - PRECISION;
+    OutputBitsT m_hi = static_cast<OutputBitsT>(xd.mantissa >> SHIFT);
+    T d_hi =
+        FPBits<T>::create_value(xd.sign, static_cast<OutputBitsT>(exp_hi),
+                                (m_hi & FPBits<T>::SIG_MASK) | IMPLICIT_MASK)
+            .get_val();
+
+    if constexpr (SHIFT == 0) {
+      return d_hi;
+    } else {
+      using MantissaType = typename DyadicFloat<Bits>::MantissaType;
+      constexpr MantissaType ROUND_MASK = MantissaType(1) << (SHIFT - 1);
+      constexpr MantissaType STICKY_MASK = ROUND_MASK - MantissaType(1);
+
+      bool round_bit = !(xd.mantissa & ROUND_MASK).is_zero();
+      bool sticky_bit = !(xd.mantissa & STICKY_MASK).is_zero();
+      int rs_idx =
+          static_cast<int>(round_bit) * 2 + static_cast<int>(sticky_bit);
+
+      int exp_lo = exp_hi - static_cast<int>(PRECISION) - 1;
+      T d_lo = FPBits<T>::create_value(
+                   xd.sign, static_cast<OutputBitsT>(exp_lo), IMPLICIT_MASK)
+                   .get_val();
+
+      T rs = T(0);
+#if defined(LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY) ||                        \
+    defined(LIBC_TARGET_ARCH_IS_GPU)
+      rs = static_cast<T>(rs_idx);
+#else
+      if (cpp::is_constant_evaluated())
+        rs = static_cast<T>(rs_idx);
+      else
+        rs = internal::DYADIC_RS_TABLE<T>[rs_idx];
+#endif
+
+      // Still correct without FMA instructions because d_lo is guaranteed
+      // normal on this path.
+      return multiply_add(d_lo, rs, d_hi);
+    }
+  }
+}
+
+} // namespace fp_eval
+
+template <size_t Bits>
+template <FPType DstType, bool ShouldSignalExceptions>
+LIBC_INLINE LIBC_CONSTEXPR_DEFAULT typename FPRep<DstType>::StorageType
+DyadicFloat<Bits>::generic_as_bits() const {
+#if defined(LIBC_MATH_HAS_NO_EXCEPT) && defined(LIBC_MATH_HAS_NO_ERRNO) &&     \
+    defined(LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY)
+  return integer_eval::dyadic_as_bits<DstType>(*this);
+#else
+  return fenv_eval::dyadic_as_bits<DstType, ShouldSignalExceptions>(*this);
+#endif
+}
+
+template <size_t Bits>
+template <
+    typename T, bool ShouldSignalExceptions,
+    cpp::enable_if_t<
+        cpp::is_floating_point_v<T> && (FPBits<T>::FRACTION_LEN < Bits), int>>
+LIBC_INLINE LIBC_CONSTEXPR_DEFAULT T DyadicFloat<Bits>::generic_as() const {
+  return FPBits<T>(generic_as_bits<get_fp_type<T>(), ShouldSignalExceptions>())
+      .get_val();
+}
+
+template <size_t Bits>
+template <
+    typename T, bool ShouldSignalExceptions,
+    cpp::enable_if_t<
+        cpp::is_floating_point_v<T> && (FPBits<T>::FRACTION_LEN < Bits), int>>
+LIBC_INLINE LIBC_CONSTEXPR_DEFAULT T DyadicFloat<Bits>::fast_as() const {
+  if constexpr (fp_eval::internal::IS_NATIVE_HW_DYADIC_TYPE<T>)
+    return fp_eval::dyadic_as<T, ShouldSignalExceptions>(*this);
+  else
+    return fenv_eval::dyadic_as<T, ShouldSignalExceptions>(*this);
+}
+
+template <size_t Bits>
+template <
+    typename T, bool ShouldSignalExceptions,
+    cpp::enable_if_t<
+        cpp::is_floating_point_v<T> && (FPBits<T>::FRACTION_LEN < Bits), int>>
+LIBC_INLINE LIBC_CONSTEXPR_DEFAULT T DyadicFloat<Bits>::as() const {
+#ifdef LIBC_FPUTIL_DYADIC_AS_IMPL
+#if LIBC_MATH_IMPL_IS(LIBC_FPUTIL_DYADIC_AS_IMPL, integer_eval)
+  return integer_eval::dyadic_as<T>(*this);
+#elif LIBC_MATH_IMPL_IS(LIBC_FPUTIL_DYADIC_AS_IMPL, fenv_eval)
+  return fenv_eval::dyadic_as<T, ShouldSignalExceptions>(*this);
+#elif LIBC_MATH_IMPL_IS(LIBC_FPUTIL_DYADIC_AS_IMPL, fp_eval)
+  return fp_eval::dyadic_as<T, ShouldSignalExceptions>(*this);
+#else
+#error "Unsupported LIBC_FPUTIL_DYADIC_AS_IMPL"
+#endif
+#else // !LIBC_FPUTIL_DYADIC_AS_IMPL
+#if defined(LIBC_MATH_HAS_NO_EXCEPT) && defined(LIBC_MATH_HAS_NO_ERRNO) &&     \
+    defined(LIBC_MATH_HAS_ASSUME_ROUND_NEAREST_ONLY)
+  if constexpr (!fp_eval::internal::IS_NATIVE_HW_DYADIC_TYPE<T> ||
+                !ShouldSignalExceptions)
+    return integer_eval::dyadic_as<T>(*this);
+#endif
+  if constexpr (fp_eval::internal::IS_NATIVE_HW_DYADIC_TYPE<T> &&
+                ShouldSignalExceptions) {
+    return fp_eval::dyadic_as<T, ShouldSignalExceptions>(*this);
+  } else {
+    return fenv_eval::dyadic_as<T, ShouldSignalExceptions>(*this);
+  }
+#endif // LIBC_FPUTIL_DYADIC_AS_IMPL
+}
+
+template <size_t Bits>
+template <typename T, cpp::enable_if_t<cpp::is_floating_point_v<T> &&
+                                           (FPBits<T>::FRACTION_LEN < Bits),
+                                       int>>
+LIBC_INLINE constexpr DyadicFloat<Bits>::operator T() const {
+  return as<T, /*ShouldSignalExceptions=*/true>();
+}
 
 // Quick add - Add 2 dyadic floats with rounding toward 0 and then normalize
 // the output:
@@ -765,9 +919,8 @@ LIBC_INLINE constexpr DyadicFloat<Bits> pow_n(const DyadicFloat<Bits> &a,
   DyadicFloat<Bits> cur_power = a;
 
   while (power > 0) {
-    if ((power % 2) > 0) {
+    if ((power % 2) > 0)
       result = quick_mul(result, cur_power);
-    }
     power = power >> 1;
     cur_power = quick_mul(cur_power, cur_power);
   }

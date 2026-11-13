@@ -15,7 +15,9 @@
 
 #else // Overlay mode
 
+#if __has_include(<fenv.h>)
 #include <fenv.h>
+#endif // __has_include(<fenv.h>)
 
 // In some environment, FE_ALL_EXCEPT is set to 0 and the remaining exceptions
 // FE_* are missing.
